@@ -1,0 +1,39 @@
+"""
+FastAPI dependency로 조합된 "현재 인증 사용자" 조회 기반.
+
+흐름:
+    get_current_user_id (app/core/security.py)
+        -> Cognito sub 획득
+    get_current_member (여기)
+        -> sub(=user_id)로 UserRepository를 통해 MEMBER 조회
+        -> MEMBER가 없으면 404
+"""
+
+from fastapi import Depends, HTTPException, status
+from sqlalchemy.orm import Session
+
+from app.core.database import get_db
+from app.core.security import get_current_user_id
+from app.models.user import User
+from app.repositories.user_repository import UserRepository
+
+
+def get_current_member(
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+) -> User:
+    """
+    인증된 Cognito sub에 해당하는 MEMBER를 조회한다.
+
+    다른 API는 이 dependency를 통해 "현재 로그인한 사용자"를
+    바로 얻을 수 있다. 회원가입 전(Cognito 계정은 있지만 MEMBER
+    레코드가 아직 없는 상태) 요청에 대해서는 404로 명확히 구분한다.
+    """
+    user_repository = UserRepository(db)
+    member = user_repository.get_by_id(user_id)
+    if member is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Member not found for the authenticated user",
+        )
+    return member
