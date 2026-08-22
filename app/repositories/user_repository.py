@@ -36,3 +36,17 @@ class UserRepository:
             .limit(1)
         )
         return self.db.execute(stmt).first() is not None
+
+    def create(self, member: User) -> User:
+        """
+        새 MEMBER row를 생성한다.
+
+        add + flush까지만 담당하고 commit/rollback은 호출자(service)의
+        책임으로 둔다. 이렇게 하면 애플리케이션 사전 중복 검사를 통과한
+        뒤에도 flush 시점에 발생할 수 있는 DB unique constraint 위반
+        (경쟁 조건에 의한 최종 방어선)을 service 계층에서 하나의
+        트랜잭션 경계 안에서 감지하고 롤백할 수 있다.
+        """
+        self.db.add(member)
+        self.db.flush()
+        return member
