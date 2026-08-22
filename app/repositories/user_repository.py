@@ -23,3 +23,16 @@ class UserRepository:
         """주어진 닉네임이 이미 존재하는지 확인한다."""
         stmt = select(User.user_id).where(User.nickname == nickname).limit(1)
         return self.db.execute(stmt).first() is not None
+
+    def exists_by_nickname_excluding_user_id(self, nickname: str, exclude_user_id: str) -> bool:
+        """
+        본인(exclude_user_id)을 제외한 다른 MEMBER가 이미 해당 닉네임을
+        사용 중인지 확인한다. 프로필 수정 시 "본인의 기존 닉네임을
+        그대로 다시 보내는 경우"를 중복으로 오판하지 않기 위해 사용한다.
+        """
+        stmt = (
+            select(User.user_id)
+            .where(User.nickname == nickname, User.user_id != exclude_user_id)
+            .limit(1)
+        )
+        return self.db.execute(stmt).first() is not None
