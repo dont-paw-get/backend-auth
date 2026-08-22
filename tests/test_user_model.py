@@ -48,8 +48,8 @@ def _make_user(**overrides):
 
 
 class TestUserTableDefinition:
-    def test_table_name_is_users(self):
-        assert User.__tablename__ == "users"
+    def test_table_name_is_member(self):
+        assert User.__tablename__ == "member"
 
     def test_password_fields_are_not_present(self):
         columns = {c.name for c in User.__table__.columns}

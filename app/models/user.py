@@ -15,7 +15,7 @@ class User(Base):
     password/password_hash 컬럼을 두지 않는다.
     """
 
-    __tablename__ = "users"
+    __tablename__ = "member"
 
     user_id: Mapped[str] = mapped_column(String, primary_key=True)
 
