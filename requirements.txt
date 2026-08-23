@@ -5,11 +5,18 @@ pydantic-settings==2.6.1
 python-dotenv==1.0.1
 
 # database
+
 sqlalchemy==2.0.36
 alembic==1.14.0
 psycopg[binary]==3.2.3
 
+# authentication
+
+PyJWT==2.13.0
+cryptography==50.0.0
+
 # test
+
 pytest==8.3.4
 httpx==0.28.0
 pytest-asyncio==0.24.0
