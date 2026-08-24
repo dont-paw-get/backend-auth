@@ -6,8 +6,14 @@ TestClient 없이 in-memory SQLite 세션 + UserRepository를 직접 사용해
 검증한다. TrustedIdentity(user_id/email)는 이미 인증 계층에서 신뢰된
 값이라고 가정하며, 이 테스트에서도 HTTP 헤더나 Cognito 호출을 흉내내지
 않고 값을 직접 구성해서 넘긴다.
+
+CLIAR-87: TrustedIdentity.user_id는 UUID이고, 생성된 member는
+member_id(UUID)를 가진다. agree_terms/agree_privacy 필수 동의 검증은
+유지되지만, member 테이블에는 더 이상 이 값들이 저장되지 않는다
+(terms/member_agreement 이관은 이번 CLIAR-87 API 범위 밖).
 """
 
+import uuid
 from datetime import datetime, timezone
 
 import pytest
@@ -15,13 +21,12 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.core.database import Base
-from app.models.user import User
+from app.models.user import MemberStatus, User
 from app.repositories.user_repository import UserRepository
 from app.services.member_service import (
     EmailAlreadyExistsError,
     InvalidNicknameError,
     MemberAlreadyExistsError,
-    NicknameAlreadyExistsError,
     OnboardingData,
     RequiredConsentNotAgreedError,
     TrustedIdentity,
@@ -54,15 +59,17 @@ def _row_count(db_session) -> int:
     return len(db_session.execute(select(User)).scalars().all())
 
 
-def _existing_member(db_session, user_id="existing-sub", email="existing@example.com", nickname="existing-nick"):
-    now = datetime.now(timezone.utc)
+def _existing_member(
+    db_session,
+    member_id=None,
+    email="existing@example.com",
+    nickname="existing-nick",
+):
     member = User(
-        user_id=user_id,
+        member_id=member_id or uuid.uuid4(),
         email=email,
         nickname=nickname,
-        agree_terms=True,
-        agree_privacy=True,
-        agreed_at=now,
+        status=MemberStatus.ACTIVE,
     )
     db_session.add(member)
     db_session.commit()
@@ -70,16 +77,17 @@ def _existing_member(db_session, user_id="existing-sub", email="existing@example
 
 
 class TestBootstrapMemberSuccess:
-    def test_creates_member_with_expected_user_id(self, db_session, user_repository):
-        identity = TrustedIdentity(user_id="cognito-sub-0001", email="new@example.com")
+    def test_creates_member_with_expected_member_id(self, db_session, user_repository):
+        member_id = uuid.uuid4()
+        identity = TrustedIdentity(user_id=member_id, email="new@example.com")
         onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=True)
 
         member = bootstrap_member(identity, onboarding, user_repository)
 
-        assert member.user_id == "cognito-sub-0001"
+        assert member.member_id == member_id
 
     def test_email_is_saved(self, db_session, user_repository):
-        identity = TrustedIdentity(user_id="sub-1", email="new@example.com")
+        identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
         onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=True)
 
         member = bootstrap_member(identity, onboarding, user_repository)
@@ -87,7 +95,7 @@ class TestBootstrapMemberSuccess:
         assert member.email == "new@example.com"
 
     def test_email_is_normalized_with_strip_and_lowercase(self, db_session, user_repository):
-        identity = TrustedIdentity(user_id="sub-1", email="  New@Example.COM  ")
+        identity = TrustedIdentity(user_id=uuid.uuid4(), email="  New@Example.COM  ")
         onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=True)
 
         member = bootstrap_member(identity, onboarding, user_repository)
@@ -95,7 +103,7 @@ class TestBootstrapMemberSuccess:
         assert member.email == "new@example.com"
 
     def test_nickname_is_saved(self, db_session, user_repository):
-        identity = TrustedIdentity(user_id="sub-1", email="new@example.com")
+        identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
         onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=True)
 
         member = bootstrap_member(identity, onboarding, user_repository)
@@ -103,65 +111,27 @@ class TestBootstrapMemberSuccess:
         assert member.nickname == "newnick"
 
     def test_nickname_is_trimmed_before_saving(self, db_session, user_repository):
-        identity = TrustedIdentity(user_id="sub-1", email="new@example.com")
+        identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
         onboarding = OnboardingData(nickname="  newnick  ", agree_terms=True, agree_privacy=True)
 
         member = bootstrap_member(identity, onboarding, user_repository)
 
         assert member.nickname == "newnick"
 
-    def test_agree_ai_analysis_false_creates_member(self, db_session, user_repository):
-        identity = TrustedIdentity(user_id="sub-1", email="new@example.com")
-        onboarding = OnboardingData(
-            nickname="newnick", agree_terms=True, agree_privacy=True, agree_ai_analysis=False
-        )
-
-        member = bootstrap_member(identity, onboarding, user_repository)
-
-        assert member.agree_ai_analysis is False
-
-    def test_agree_ai_analysis_true_creates_member(self, db_session, user_repository):
-        identity = TrustedIdentity(user_id="sub-1", email="new@example.com")
-        onboarding = OnboardingData(
-            nickname="newnick", agree_terms=True, agree_privacy=True, agree_ai_analysis=True
-        )
-
-        member = bootstrap_member(identity, onboarding, user_repository)
-
-        assert member.agree_ai_analysis is True
-
-    def test_agreed_at_is_recorded(self, db_session, user_repository):
-        identity = TrustedIdentity(user_id="sub-1", email="new@example.com")
-        onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=True)
-
-        before = datetime.now(timezone.utc)
-        member = bootstrap_member(identity, onboarding, user_repository)
-        after = datetime.now(timezone.utc)
-
-        assert member.agreed_at is not None
-        # SQLite는 DateTime(timezone=True) 컬럼이라도 refresh 이후
-        # naive datetime을 반환하는 한계가 있다(실제 PostgreSQL은
-        # timezone-aware로 정상 보존한다). 테스트 환경 한계를 감안해
-        # naive/aware 여부와 무관하게 값만 비교한다.
-        agreed_at = member.agreed_at
-        if agreed_at.tzinfo is None:
-            agreed_at = agreed_at.replace(tzinfo=timezone.utc)
-        assert before <= agreed_at <= after
-
-    def test_status_uses_existing_model_default(self, db_session, user_repository):
-        identity = TrustedIdentity(user_id="sub-1", email="new@example.com")
+    def test_status_defaults_to_active(self, db_session, user_repository):
+        """CLIAR-87: member 최초 생성 시 status는 ACTIVE로 설정된다
+        (PENDING은 최종 스키마에 존재하지 않는다)."""
+        identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
         onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=True)
 
         member = bootstrap_member(identity, onboarding, user_repository)
 
-        # User ORM의 기존 status default("PENDING")를 그대로 사용하며,
-        # 이번 서비스에서 임의로 ACTIVE 등으로 전환하지 않는다.
-        assert member.status == "PENDING"
+        assert member.status == MemberStatus.ACTIVE
 
 
 class TestBootstrapMemberRequiredConsent:
     def test_agree_terms_false_is_rejected(self, db_session, user_repository):
-        identity = TrustedIdentity(user_id="sub-1", email="new@example.com")
+        identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
         onboarding = OnboardingData(nickname="newnick", agree_terms=False, agree_privacy=True)
 
         with pytest.raises(RequiredConsentNotAgreedError):
@@ -170,7 +140,7 @@ class TestBootstrapMemberRequiredConsent:
         assert _row_count(db_session) == 0
 
     def test_agree_privacy_false_is_rejected(self, db_session, user_repository):
-        identity = TrustedIdentity(user_id="sub-1", email="new@example.com")
+        identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
         onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=False)
 
         with pytest.raises(RequiredConsentNotAgreedError):
@@ -181,7 +151,7 @@ class TestBootstrapMemberRequiredConsent:
 
 class TestBootstrapMemberNicknameValidation:
     def test_null_nickname_is_rejected(self, db_session, user_repository):
-        identity = TrustedIdentity(user_id="sub-1", email="new@example.com")
+        identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
         onboarding = OnboardingData(nickname=None, agree_terms=True, agree_privacy=True)
 
         with pytest.raises(InvalidNicknameError):
@@ -190,7 +160,7 @@ class TestBootstrapMemberNicknameValidation:
         assert _row_count(db_session) == 0
 
     def test_empty_nickname_is_rejected(self, db_session, user_repository):
-        identity = TrustedIdentity(user_id="sub-1", email="new@example.com")
+        identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
         onboarding = OnboardingData(nickname="", agree_terms=True, agree_privacy=True)
 
         with pytest.raises(InvalidNicknameError):
@@ -199,7 +169,7 @@ class TestBootstrapMemberNicknameValidation:
         assert _row_count(db_session) == 0
 
     def test_blank_nickname_is_rejected(self, db_session, user_repository):
-        identity = TrustedIdentity(user_id="sub-1", email="new@example.com")
+        identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
         onboarding = OnboardingData(nickname="   ", agree_terms=True, agree_privacy=True)
 
         with pytest.raises(InvalidNicknameError):
@@ -209,9 +179,10 @@ class TestBootstrapMemberNicknameValidation:
 
 
 class TestBootstrapMemberDuplicates:
-    def test_duplicate_user_id_is_rejected(self, db_session, user_repository):
-        _existing_member(db_session, user_id="dup-sub")
-        identity = TrustedIdentity(user_id="dup-sub", email="new@example.com")
+    def test_duplicate_member_id_is_rejected(self, db_session, user_repository):
+        member_id = uuid.uuid4()
+        _existing_member(db_session, member_id=member_id)
+        identity = TrustedIdentity(user_id=member_id, email="new@example.com")
         onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=True)
 
         with pytest.raises(MemberAlreadyExistsError):
@@ -221,7 +192,7 @@ class TestBootstrapMemberDuplicates:
 
     def test_duplicate_email_is_rejected(self, db_session, user_repository):
         _existing_member(db_session, email="taken@example.com")
-        identity = TrustedIdentity(user_id="sub-1", email="taken@example.com")
+        identity = TrustedIdentity(user_id=uuid.uuid4(), email="taken@example.com")
         onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=True)
 
         with pytest.raises(EmailAlreadyExistsError):
@@ -231,7 +202,7 @@ class TestBootstrapMemberDuplicates:
 
     def test_duplicate_email_is_detected_after_normalization(self, db_session, user_repository):
         _existing_member(db_session, email="user@test.com")
-        identity = TrustedIdentity(user_id="sub-1", email="  USER@Test.com  ")
+        identity = TrustedIdentity(user_id=uuid.uuid4(), email="  USER@Test.com  ")
         onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=True)
 
         with pytest.raises(EmailAlreadyExistsError):
@@ -239,24 +210,27 @@ class TestBootstrapMemberDuplicates:
 
         assert _row_count(db_session) == 1
 
-    def test_duplicate_nickname_is_rejected(self, db_session, user_repository):
+    def test_duplicate_nickname_is_allowed(self, db_session, user_repository):
+        """CLIAR-87 확정 요구사항: member.nickname은 UNIQUE 제약이 없으며
+        중복을 허용한다. 회원 최초 생성 시에도 다른 회원과 동일한
+        nickname으로 정상 생성되어야 한다."""
         _existing_member(db_session, nickname="taken-nick")
-        identity = TrustedIdentity(user_id="sub-1", email="new@example.com")
+        identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
         onboarding = OnboardingData(nickname="taken-nick", agree_terms=True, agree_privacy=True)
 
-        with pytest.raises(NicknameAlreadyExistsError):
-            bootstrap_member(identity, onboarding, user_repository)
+        member = bootstrap_member(identity, onboarding, user_repository)
 
-        assert _row_count(db_session) == 1
+        assert member.nickname == "taken-nick"
+        assert _row_count(db_session) == 2
 
-    def test_duplicate_nickname_is_detected_after_trim(self, db_session, user_repository):
+    def test_duplicate_nickname_after_trim_is_allowed(self, db_session, user_repository):
         _existing_member(db_session, nickname="taken-nick")
-        identity = TrustedIdentity(user_id="sub-1", email="new@example.com")
+        identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
         onboarding = OnboardingData(
             nickname="  taken-nick  ", agree_terms=True, agree_privacy=True
         )
 
-        with pytest.raises(NicknameAlreadyExistsError):
-            bootstrap_member(identity, onboarding, user_repository)
+        member = bootstrap_member(identity, onboarding, user_repository)
 
-        assert _row_count(db_session) == 1
+        assert member.nickname == "taken-nick"
+        assert _row_count(db_session) == 2

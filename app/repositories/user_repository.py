@@ -1,3 +1,5 @@
+import uuid
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -10,29 +12,43 @@ class UserRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_by_id(self, user_id: str) -> User | None:
-        """user_id(Cognito sub)로 MEMBER를 조회한다. 없으면 None을 반환한다."""
-        return self.db.get(User, user_id)
+    def get_by_id(self, user_id: uuid.UUID) -> User | None:
+        """member_id(Cognito sub를 UUID로 저장한 값)로 MEMBER를 조회한다.
+
+        CLIAR-87부터 member의 PK는 내부 BIGINT(id)이고, Cognito sub는
+        별도의 UNIQUE 컬럼인 member_id(UUID)에 저장된다. 이 메서드는
+        기존 이름(get_by_id)을 유지하되, 실제로는 member_id로 조회한다.
+        """
+        stmt = select(User).where(User.member_id == user_id).limit(1)
+        return self.db.execute(stmt).scalar_one_or_none()
 
     def exists_by_email(self, email: str) -> bool:
         """주어진 이메일(정규화된 값)이 이미 존재하는지 확인한다."""
-        stmt = select(User.user_id).where(User.email == email).limit(1)
+        stmt = select(User.member_id).where(User.email == email).limit(1)
         return self.db.execute(stmt).first() is not None
 
     def exists_by_nickname(self, nickname: str) -> bool:
         """주어진 닉네임이 이미 존재하는지 확인한다."""
-        stmt = select(User.user_id).where(User.nickname == nickname).limit(1)
+        stmt = select(User.member_id).where(User.nickname == nickname).limit(1)
         return self.db.execute(stmt).first() is not None
 
-    def exists_by_nickname_excluding_user_id(self, nickname: str, exclude_user_id: str) -> bool:
+    def exists_by_nickname_excluding_user_id(
+        self, nickname: str, exclude_user_id: uuid.UUID
+    ) -> bool:
         """
-        본인(exclude_user_id)을 제외한 다른 MEMBER가 이미 해당 닉네임을
-        사용 중인지 확인한다. 프로필 수정 시 "본인의 기존 닉네임을
-        그대로 다시 보내는 경우"를 중복으로 오판하지 않기 위해 사용한다.
+        본인(exclude_user_id, member_id)을 제외한 다른 MEMBER가 이미
+        해당 닉네임을 사용 중인지 확인한다. 프로필 수정 시 "본인의
+        기존 닉네임을 그대로 다시 보내는 경우"를 중복으로 오판하지
+        않기 위해 사용한다.
+
+        CLIAR-87에서 nickname UNIQUE 제약이 제거되었으므로, 이 메서드는
+        더 이상 DB 제약 위반을 막기 위한 목적이 아니다. 다만 기존
+        API 계약(PATCH /users/me에서 타인의 닉네임 재사용 시 409)을
+        그대로 유지하기 위해 애플리케이션 레벨 검사로 존속시킨다.
         """
         stmt = (
-            select(User.user_id)
-            .where(User.nickname == nickname, User.user_id != exclude_user_id)
+            select(User.member_id)
+            .where(User.nickname == nickname, User.member_id != exclude_user_id)
             .limit(1)
         )
         return self.db.execute(stmt).first() is not None

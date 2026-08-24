@@ -51,25 +51,12 @@ def update_current_member(
     현재 MEMBER 정보 수정
     """
 
-    user_repository = UserRepository(db)
-
+    # CLIAR-87: member.nickname은 UNIQUE 제약이 없으며 중복을 허용한다.
+    # 따라서 프로필 수정 시 다른 회원과 동일한 nickname으로 변경해도
+    # 409를 반환하지 않는다.
     updates = payload.model_dump(
         exclude_unset=True
     )
-
-
-    if "nickname" in updates:
-
-        new_nickname = updates["nickname"]
-
-        if user_repository.exists_by_nickname_excluding_user_id(
-            new_nickname,
-            exclude_user_id=current_member.user_id,
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Nickname is already in use by another member",
-            )
 
 
     for field, value in updates.items():
