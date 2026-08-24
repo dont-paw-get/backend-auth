@@ -128,7 +128,11 @@ def upgrade() -> None:
     )
 
     # 7) status: String -> member_status ENUM, 기존 PENDING -> ACTIVE
+    #    기존 컬럼의 server_default("PENDING")가 새 ENUM 값 목록에 없어서,
+    #    타입 변경 시 Postgres 가 DEFAULT 표현식을 새 타입으로 캐스팅하려다
+    #    실패한다. 그래서 타입을 바꾸기 전에 먼저 DEFAULT 를 제거한다.
     op.execute("UPDATE member SET status = 'ACTIVE' WHERE status = 'PENDING'")
+    op.alter_column("member", "status", server_default=None)
     op.alter_column(
         "member",
         "status",
@@ -137,7 +141,6 @@ def upgrade() -> None:
         existing_nullable=False,
         postgresql_using="status::member_status",
     )
-    op.alter_column("member", "status", server_default=None)
 
     # 8) 약관/대표사서 관련 컬럼 제거.
     #    주의: 이 컬럼들에 저장된 기존 데이터(동의 여부/시각)는 이
