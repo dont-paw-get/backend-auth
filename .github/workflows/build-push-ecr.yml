@@ -12,15 +12,8 @@ on:
       - "**/*.md"
   workflow_dispatch: {}  # 수동 실행도 허용
 
-# ECR 로그인에 OIDC(IAM 역할 수임) 사용
 permissions:
-  contents: write
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
+  contents: write        # 매니페스트 이미지 태그 갱신 커밋을 위해
 
 env:
   AWS_REGION: ap-northeast-2
@@ -35,18 +28,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # debug: 변수/레포/브랜치가 실제로 뭘로 들어오는지 확인
-      - name: debug role arn
-        run: |
-          echo "ROLE=[${{ vars.AWS_GHA_ROLE_ARN }}]"
-          echo "REPO=${{ github.repository }}"
-          echo "REF=${{ github.ref }}"
-
-      - name: Configure AWS credentials (OIDC)
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          # GitHub Actions 가 수임할 IAM 역할 ARN. 리포지토리 Variables 에 등록.
-          role-to-assume: ${{ vars.AWS_GHA_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
@@ -64,9 +50,6 @@ jobs:
           docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
           docker push "$REGISTRY/$ECR_REPOSITORY:${{ github.ref_name }}-latest"
 
-      # prod 배포 사용 시: 아래를 브랜치별로 overlay 를 판별하도록 바꾸세요.
-      #   OVERLAY=$([ "${{ github.ref_name }}" = "main" ] && echo prod || echo dev)
-      #   KFILE="k8s/overlays/${OVERLAY}/kustomization.yaml"
       - name: Bump dev overlay image tag (GitOps)
         env:
           IMAGE_TAG: ${{ github.sha }}
@@ -79,4 +62,7 @@ jobs:
           if git diff --quiet "$KFILE"; then
             echo "이미지 태그 변경 없음"
           else
-            git
+            git add "$KFILE"
+            git commit -m "chore(deploy): bump dev image tag to ${IMAGE_TAG}"
+            git push origin "HEAD:${{ github.ref_name }}"
+          fi
