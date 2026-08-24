@@ -8,12 +8,12 @@ HTTP Header나 Cognito SDK를 전혀 다루지 않는다. 추후 실제 API Gate
 endpoint만 추가하면 된다.
 """
 
+import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 
 from sqlalchemy.exc import IntegrityError
 
-from app.models.user import User
+from app.models.user import MemberStatus, User
 from app.repositories.user_repository import UserRepository
 
 
@@ -23,10 +23,11 @@ class TrustedIdentity:
     이미 인증 계층(추후 API Gateway/Cognito)에서 신뢰된 사용자 식별 정보.
 
     이 값들은 클라이언트가 직접 입력한 값이 아니라, 인증이 끝난 이후에만
-    전달된다고 가정한다.
+    전달된다고 가정한다. user_id는 Cognito sub이며, member.member_id
+    (UUID)에 그대로 저장된다.
     """
 
-    user_id: str
+    user_id: uuid.UUID
     email: str
 
 
@@ -61,7 +62,13 @@ class EmailAlreadyExistsError(MemberBootstrapError):
 
 
 class NicknameAlreadyExistsError(MemberBootstrapError):
-    """다른 MEMBER가 이미 동일 nickname을 사용 중인 경우 발생한다."""
+    """
+    더 이상 사용되지 않는다(하위 호환을 위해 남겨둠).
+
+    CLIAR-87 확정 요구사항: member.nickname은 UNIQUE 제약이 없으며
+    중복을 허용한다. bootstrap_member는 더 이상 nickname 중복을
+    이유로 이 예외를 발생시키지 않는다.
+    """
 
 
 def _normalize_email(email: str) -> str:
@@ -92,9 +99,10 @@ def bootstrap_member(
     """
     신뢰된 사용자 식별 정보와 온보딩 데이터로 MEMBER를 최초 생성한다.
 
-    검증 순서: nickname 정규화 -> 필수 동의 확인 -> 중복 검사(user_id/
-    email/nickname, 모두 정규화된 값 기준) -> 생성. 검증 실패 시 어떤
-    DB row도 추가되지 않는다.
+    검증 순서: nickname 정규화 -> 필수 동의 확인 -> 중복 검사(member_id/
+    email, 모두 정규화된 값 기준) -> 생성. nickname은 CLIAR-87부터 중복을
+    허용하므로 중복 검사 대상이 아니다. 검증 실패 시 어떤 DB row도
+    추가되지 않는다.
 
     transaction 경계: 이 함수가 commit까지 책임진다. UserRepository.create
     는 add + flush만 수행해 애플리케이션 사전 중복 검사를 통과한 뒤에도
@@ -117,19 +125,19 @@ def bootstrap_member(
     if user_repository.exists_by_email(normalized_email):
         raise EmailAlreadyExistsError(f"Email {normalized_email!r} is already in use")
 
-    if user_repository.exists_by_nickname(normalized_nickname):
-        raise NicknameAlreadyExistsError(
-            f"Nickname {normalized_nickname!r} is already in use"
-        )
+    # CLIAR-87: member.nickname은 UNIQUE 제약이 없으며 중복을 허용한다.
+    # 따라서 회원 최초 생성 시 nickname 중복을 이유로 거부하지 않는다.
 
+    # CLIAR-87: agree_terms/agree_privacy/agree_ai_analysis/agreed_at은
+    # member 테이블 컬럼에서 제거되었다(terms + member_agreement로 이관
+    # 예정이지만, 실제 동의 이력 저장 API는 이번 CLIAR-87 범위가 아니다).
+    # 필수 동의 검증 자체는 위에서 그대로 수행하고, member row에는
+    # 더 이상 이 값들을 저장하지 않는다.
     member = User(
-        user_id=identity.user_id,
+        member_id=identity.user_id,
         email=normalized_email,
         nickname=normalized_nickname,
-        agree_terms=onboarding.agree_terms,
-        agree_privacy=onboarding.agree_privacy,
-        agree_ai_analysis=onboarding.agree_ai_analysis,
-        agreed_at=datetime.now(timezone.utc),
+        status=MemberStatus.ACTIVE,
     )
 
     try:

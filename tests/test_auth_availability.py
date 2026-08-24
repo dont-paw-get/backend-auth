@@ -6,7 +6,7 @@ FastAPI의 get_db 의존성을 in-memory SQLite 세션으로 override 하여
 API -> Service -> Repository -> DB 흐름을 검증한다.
 """
 
-from datetime import datetime, timezone
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,7 +16,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base, get_db
 from app.main import app
-from app.models.user import User
+from app.models.user import MemberStatus, User
 
 ENDPOINT = "/api/v1/auth/availability"
 
@@ -53,14 +53,11 @@ def client(db_session):
 
 
 def _create_user(db_session, *, email="taken@example.com", nickname="takennick"):
-    now = datetime.now(timezone.utc)
     user = User(
-        user_id="existing-user",
+        member_id=uuid.uuid4(),
         email=email,
         nickname=nickname,
-        agree_terms=True,
-        agree_privacy=True,
-        agreed_at=now,
+        status=MemberStatus.ACTIVE,
     )
     db_session.add(user)
     db_session.commit()
