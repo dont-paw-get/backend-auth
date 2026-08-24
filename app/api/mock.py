@@ -7,7 +7,7 @@ from app.core.config import settings
 router = APIRouter()
 
 
-@router.get("/mock/ping")
+@router.get("/mock")
 def mock_ping():
     return {
         "message": "pong",
