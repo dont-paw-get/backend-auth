@@ -74,7 +74,9 @@ def upgrade() -> None:
     op.create_unique_constraint("uq_member_member_id", "member", ["member_id"])
 
     # 3) 새 내부 PK(id)를 추가하기 전에 기존 PK(user_id) 제약을 제거한다.
-    op.drop_constraint("member_pkey", "member", type_="primary")
+    #    PostgreSQL은 테이블 rename(aa8dcb64d638: users -> member) 시 제약조건
+    #    이름을 함께 바꾸지 않으므로, 실제 제약조건 이름은 여전히 users_pkey다.
+    op.drop_constraint("users_pkey", "member", type_="primary")
     op.add_column(
         "member",
         sa.Column("id", sa.BigInteger(), sa.Identity(), nullable=True),
