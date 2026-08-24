@@ -19,6 +19,8 @@ permissions:
 
 env:
   AWS_REGION: ap-northeast-2
+  # ⚠️ 실제 만든 ECR 리포지토리 이름과 반드시 일치해야 함.
+  #    `aws ecr describe-repositories`로 확인한 이름으로 맞추세요.
   ECR_REPOSITORY: dpyb-dev/dpyb-auth
 
 jobs:
@@ -27,6 +29,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # debug: 변수/레포/브랜치가 실제로 뭘로 들어오는지 확인
+      - name: debug role arn
+        run: |
+          echo "ROLE=[${{ vars.AWS_GHA_ROLE_ARN }}]"
+          echo "REPO=${{ github.repository }}"
+          echo "REF=${{ github.ref }}"
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -65,7 +74,4 @@ jobs:
           if git diff --quiet "$KFILE"; then
             echo "이미지 태그 변경 없음"
           else
-            git add "$KFILE"
-            git commit -m "chore(deploy): bump dev image tag to ${IMAGE_TAG}"
-            git push origin "HEAD:${{ github.ref_name }}"
-          fi
+            git
