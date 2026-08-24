@@ -1,0 +1,29 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: backend-auth
+  labels:
+    app.kubernetes.io/name: backend-auth
+  annotations:
+    # EKS Auto Mode 사용. scheme/인증서 등은 IngressClassParams(k8s/cluster/ingressclass-alb.yaml)에 있음.
+    # 아래 어노테이션은 Auto Mode 에서도 개별 Ingress 에 사용 가능.
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+    # HTTPS 는 IngressClassParams 의 certificateARNs 로 설정 후 위 listen-ports 에 {"HTTPS":443} 추가
+    # alb.ingress.kubernetes.io/ssl-redirect: '443'
+spec:
+  # controller: eks.amazonaws.com/alb 를 가리키는 IngressClass (Auto Mode)
+  ingressClassName: alb
+  rules:
+    # 도메인이 있으면 host 를 지정하고, 없으면 ALB DNS 로 접속합니다.
+    # - host: auth.example.com
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: backend-auth
+                port:
+                  number: 80
