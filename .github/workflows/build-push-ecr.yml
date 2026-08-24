@@ -1,0 +1,71 @@
+name: Build & Push to ECR
+
+on:
+  push:
+    branches:
+      - develop         # develop → dev 환경
+      # - main          # main → prod 환경 (prod 배포 사용 시 주석 해제)
+    paths-ignore:
+      - "k8s/**"         # 태그 갱신 커밋이 무한루프 도는 것 방지
+      - "argocd/**"
+      - "docs/**"
+      - "**/*.md"
+  workflow_dispatch: {}  # 수동 실행도 허용
+
+# ECR 로그인에 OIDC(IAM 역할 수임) 사용
+permissions:
+  id-token: write
+  contents: write        # 매니페스트 이미지 태그 갱신 커밋을 위해
+
+env:
+  AWS_REGION: ap-northeast-2
+  ECR_REPOSITORY: dpyb-dev/dpyb-auth
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          # GitHub Actions 가 수임할 IAM 역할 ARN. 리포지토리 Variables 에 등록.
+          role-to-assume: ${{ vars.AWS_GHA_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build \
+            -t "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
+            -t "$REGISTRY/$ECR_REPOSITORY:${{ github.ref_name }}-latest" .
+          docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker push "$REGISTRY/$ECR_REPOSITORY:${{ github.ref_name }}-latest"
+
+      # prod 배포 사용 시: 아래를 브랜치별로 overlay 를 판별하도록 바꾸세요.
+      #   OVERLAY=$([ "${{ github.ref_name }}" = "main" ] && echo prod || echo dev)
+      #   KFILE="k8s/overlays/${OVERLAY}/kustomization.yaml"
+      - name: Bump dev overlay image tag (GitOps)
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          KFILE="k8s/overlays/dev/kustomization.yaml"
+          # kustomization.yaml 의 newTag 값을 커밋 SHA 로 치환
+          sed -i -E "s/^(\s*newTag:).*/\1 ${IMAGE_TAG}/" "$KFILE"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet "$KFILE"; then
+            echo "이미지 태그 변경 없음"
+          else
+            git add "$KFILE"
+            git commit -m "chore(deploy): bump dev image tag to ${IMAGE_TAG}"
+            git push origin "HEAD:${{ github.ref_name }}"
+          fi

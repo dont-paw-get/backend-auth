@@ -1,0 +1,25 @@
+# ⚠️ prod 배포는 아직 사용하지 않습니다.
+# (main 브랜치 → dpyb-auth 네임스페이스)
+#
+# apiVersion: argoproj.io/v1alpha1
+# kind: Application
+# metadata:
+#   name: backend-auth-prod
+#   namespace: argocd
+#   finalizers:
+#     - resources-finalizer.argocd.argoproj.io
+# spec:
+#   project: default
+#   source:
+#     repoURL: https://github.com/dont-paw-get/backend-auth.git
+#     targetRevision: main             # 상용 브랜치를 추적
+#     path: k8s/overlays/prod          # prod overlay 적용
+#   destination:
+#     server: https://kubernetes.default.svc
+#     namespace: dpyb-auth
+#   syncPolicy:
+#     automated:
+#       prune: true
+#       selfHeal: true
+#     syncOptions:
+#       - CreateNamespace=true

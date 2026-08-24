@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# 개발 환경 (develop 브랜치 → dpyb-auth-dev 네임스페이스)
+namespace: dpyb-auth-dev
+
+resources:
+  - ../../base
+
+# 개발은 1개만
+replicas:
+  - name: backend-auth
+    count: 1
+
+# 개발용 이미지. CI 가 newTag 를 커밋 SHA 로 갱신합니다.
+images:
+  - name: backend-auth
+    newName: 594532711953.dkr.ecr.ap-northeast-2.amazonaws.com/dpyb-dev/dpyb-auth
+    newTag: develop-latest
+
+# 개발 환경에서 달라지는 설정값만 덮어씀
+patches:
+  - path: configmap-patch.yaml

@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-auth
+  labels:
+    app.kubernetes.io/name: backend-auth
+spec:
+  # replicas 는 overlay 에서 환경별로 지정 (dev=1, prod=2 — prod 는 현재 주석 상태)
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: backend-auth
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: backend-auth
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      # DB 스키마 마이그레이션을 앱 기동 전에 1회 수행
+      initContainers:
+        - name: migrate
+          # 이미지 실제 경로/태그는 overlay 의 images: 트랜스포머가 주입 (CI 가 태그 갱신)
+          image: backend-auth
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef:
+                name: backend-auth-config
+            - secretRef:
+                name: backend-auth-secret
+      containers:
+        - name: backend-auth
+          image: backend-auth
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: backend-auth-config
+            - secretRef:
+                name: backend-auth-secret
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL

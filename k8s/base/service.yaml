@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-auth
+  labels:
+    app.kubernetes.io/name: backend-auth
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: backend-auth
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

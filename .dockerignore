@@ -1,0 +1,36 @@
+# git / ci
+.git
+.github
+.gitignore
+
+# python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.venv/
+venv/
+env/
+ENV/
+
+# test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+tests/
+
+# env / secrets (이미지에 절대 포함 금지)
+.env
+.env.*
+!.env.example
+
+# k8s / infra (이미지에 불필요)
+k8s/
+argocd/
+docs/
+
+# ide / os
+.vscode/
+.idea/
+*.swp
+.DS_Store
