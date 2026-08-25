@@ -263,10 +263,12 @@ class TestPatchUsersMeAuthAndNotFound:
 
         assert response.status_code == 404
 
-    def test_returns_501_when_auth_integration_not_overridden(self, client):
+    def test_returns_401_when_auth_integration_not_overridden(self, client):
+        """CLIAR-105: Cognito 인증 연동이 실제로 구현되었으므로 더 이상
+        501(CLIAR-71 시절의 임시 정책)이 아니라 401을 반환해야 한다."""
         response = client.patch(ENDPOINT, json={"nickname": "whatever"})
 
-        assert response.status_code == 501
+        assert response.status_code == 401
 
 
 class TestPatchUsersMeDisallowedFields:

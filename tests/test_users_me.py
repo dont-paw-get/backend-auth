@@ -141,11 +141,13 @@ class TestGetUsersMe:
 
         assert response.status_code == 401
 
-    def test_returns_501_when_auth_integration_not_overridden(self, client):
+    def test_returns_401_when_auth_integration_not_overridden(self, client):
         """
-        get_current_user_id를 override하지 않으면, 기존 501 placeholder
-        동작이 그대로 유지되어야 한다.
+        CLIAR-105: Cognito 인증 연동이 실제로 구현되었으므로,
+        get_current_user_id를 override하지 않고 Authorization 헤더 없이
+        호출한 경우도 더 이상 501(CLIAR-71 시절의 임시 정책)이 아니라
+        401을 반환해야 한다.
         """
         response = client.get(ENDPOINT)
 
-        assert response.status_code == 501
+        assert response.status_code == 401

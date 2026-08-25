@@ -62,16 +62,18 @@ def _make_member(db_session, member_id):
 
 
 class TestGetCurrentUserId:
-    def test_raises_error_when_auth_integration_is_not_configured(self):
+    def test_raises_401_when_called_without_authorization(self):
         """
-        API Gateway/Cognito 연동 방식이 아직 확정되지 않았으므로,
-        실제 호출 시에는 어떤 사용자 ID도 신뢰해서는 안 되고
-        "인증 연동이 구성되지 않음"을 명확한 오류로 표현해야 한다.
+        CLIAR-105: Cognito 인증 연동이 실제로 구현되었으므로, dependency
+        주입 없이 이 함수를 직접 호출하는 경우(Authorization 헤더가
+        없는 것과 동일하게 취급)도 더 이상 "인증 연동 미구성"(501,
+        CLIAR-71 시절의 임시 정책)이 아니라 일반적인 인증 실패(401)로
+        취급해야 한다.
         """
         with pytest.raises(HTTPException) as exc_info:
             get_current_user_id()
 
-        assert exc_info.value.status_code == 501
+        assert exc_info.value.status_code == 401
 
 
 class TestGetCurrentMember:
