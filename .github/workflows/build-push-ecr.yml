@@ -12,13 +12,13 @@ on:
       - "**/*.md"
   workflow_dispatch: {}  # 수동 실행도 허용
 
-# ECR 로그인에 OIDC(IAM 역할 수임) 사용
 permissions:
-  id-token: write
   contents: write        # 매니페스트 이미지 태그 갱신 커밋을 위해
 
 env:
   AWS_REGION: ap-northeast-2
+  # ⚠️ 실제 만든 ECR 리포지토리 이름과 반드시 일치해야 함.
+  #    `aws ecr describe-repositories`로 확인한 이름으로 맞추세요.
   ECR_REPOSITORY: dpyb-dev/dpyb-auth
 
 jobs:
@@ -28,11 +28,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials (OIDC)
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          # GitHub Actions 가 수임할 IAM 역할 ARN. 리포지토리 Variables 에 등록.
-          role-to-assume: ${{ vars.AWS_GHA_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
@@ -50,9 +50,6 @@ jobs:
           docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
           docker push "$REGISTRY/$ECR_REPOSITORY:${{ github.ref_name }}-latest"
 
-      # prod 배포 사용 시: 아래를 브랜치별로 overlay 를 판별하도록 바꾸세요.
-      #   OVERLAY=$([ "${{ github.ref_name }}" = "main" ] && echo prod || echo dev)
-      #   KFILE="k8s/overlays/${OVERLAY}/kustomization.yaml"
       - name: Bump dev overlay image tag (GitOps)
         env:
           IMAGE_TAG: ${{ github.sha }}
