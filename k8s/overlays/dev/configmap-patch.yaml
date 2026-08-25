@@ -5,6 +5,5 @@ metadata:
   name: backend-auth-config
 data:
   APP_ENV: "development"
-  # 개발용 Cognito User Pool / Client 로 채워주세요.
-  COGNITO_USER_POOL_ID: "ap-northeast-2_DEVxxxxxx"
-  COGNITO_CLIENT_ID: "dev-client-id-xxxxxxxx"
+  COGNITO_USER_POOL_ID: "ap-northeast-2_y1mKz50El"
+  COGNITO_CLIENT_ID: "245uq1begv38q4ij0a743lgmhb"
