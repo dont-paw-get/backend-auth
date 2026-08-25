@@ -13,8 +13,16 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.exc import IntegrityError
 
+from app.models.member_agreement import MemberAgreementAction
 from app.models.user import MemberStatus, User
+from app.repositories.member_agreement_repository import MemberAgreementRepository
+from app.repositories.terms_repository import TermsRepository
 from app.repositories.user_repository import UserRepository
+
+# CLIAR-92: 회원 최초 생성 시 동의 이력을 남길 약관 code.
+TERMS_OF_SERVICE_CODE = "TERMS_OF_SERVICE"
+PRIVACY_CODE = "PRIVACY"
+AI_ANALYSIS_CODE = "AI_ANALYSIS"
 
 
 @dataclass(frozen=True)
@@ -51,6 +59,18 @@ class InvalidNicknameError(MemberBootstrapError):
 
 class RequiredConsentNotAgreedError(MemberBootstrapError):
     """agree_terms 또는 agree_privacy가 false인 경우 발생한다."""
+
+
+class RequiredTermsNotConfiguredError(MemberBootstrapError):
+    """
+    회원 생성에 필요한 약관(TERMS_OF_SERVICE/PRIVACY, 또는
+    agree_ai_analysis=true인 경우의 AI_ANALYSIS)이 현재 적용 중인
+    상태로 DB에 존재하지 않는 경우 발생한다.
+
+    이는 사용자 입력 문제가 아니라 서버(운영) 설정 문제이므로, API
+    계층에서는 400/409가 아니라 서버 설정 오류를 나타내는 상태로
+    변환해야 한다.
+    """
 
 
 class MemberAlreadyExistsError(MemberBootstrapError):
@@ -95,19 +115,26 @@ def bootstrap_member(
     identity: TrustedIdentity,
     onboarding: OnboardingData,
     user_repository: UserRepository,
+    terms_repository: TermsRepository,
+    member_agreement_repository: MemberAgreementRepository,
 ) -> User:
     """
-    신뢰된 사용자 식별 정보와 온보딩 데이터로 MEMBER를 최초 생성한다.
+    신뢰된 사용자 식별 정보와 온보딩 데이터로 MEMBER를 최초 생성하고,
+    필수/선택 약관에 대한 AGREE 이력을 member_agreement에 저장한다.
 
     검증 순서: nickname 정규화 -> 필수 동의 확인 -> 중복 검사(member_id/
-    email, 모두 정규화된 값 기준) -> 생성. nickname은 CLIAR-87부터 중복을
+    email, 모두 정규화된 값 기준) -> 필수 약관(TERMS_OF_SERVICE, PRIVACY)
+    조회 -> (agree_ai_analysis=true인 경우) AI_ANALYSIS 약관 조회 ->
+    member 생성 -> 약관 AGREE 이력 생성. nickname은 CLIAR-87부터 중복을
     허용하므로 중복 검사 대상이 아니다. 검증 실패 시 어떤 DB row도
     추가되지 않는다.
 
-    transaction 경계: 이 함수가 commit까지 책임진다. UserRepository.create
-    는 add + flush만 수행해 애플리케이션 사전 중복 검사를 통과한 뒤에도
-    발생할 수 있는 DB unique constraint 위반(동시 요청에 의한 경쟁
-    조건)을 이 함수의 같은 트랜잭션 안에서 감지하고 롤백할 수 있게 한다.
+    transaction 경계(CLIAR-92): member 생성부터 약관 AGREE 이력 저장까지
+    전체를 이 함수 하나의 트랜잭션으로 처리하고 마지막에 한 번만
+    commit한다. UserRepository.create/MemberAgreementRepository.create는
+    모두 add + flush만 수행하므로, 중간 어느 단계에서 예외가 발생해도
+    아직 commit되지 않은 상태이며 except 블록에서 rollback하면 member
+    row까지 포함해 전부 되돌아간다.
     """
     normalized_email = _normalize_email(identity.email)
     normalized_nickname = _normalize_nickname(onboarding.nickname)
@@ -128,29 +155,76 @@ def bootstrap_member(
     # CLIAR-87: member.nickname은 UNIQUE 제약이 없으며 중복을 허용한다.
     # 따라서 회원 최초 생성 시 nickname 중복을 이유로 거부하지 않는다.
 
-    # CLIAR-87: agree_terms/agree_privacy/agree_ai_analysis/agreed_at은
-    # member 테이블 컬럼에서 제거되었다(terms + member_agreement로 이관
-    # 예정이지만, 실제 동의 이력 저장 API는 이번 CLIAR-87 범위가 아니다).
-    # 필수 동의 검증 자체는 위에서 그대로 수행하고, member row에는
-    # 더 이상 이 값들을 저장하지 않는다.
-    member = User(
-        member_id=identity.user_id,
-        email=normalized_email,
-        nickname=normalized_nickname,
-        status=MemberStatus.ACTIVE,
-    )
-
     try:
+        # 필수 약관은 member/agreement를 만들기 전에 먼저 조회해서,
+        # 약관이 없을 때 불필요하게 member row를 만들었다가 되돌리는
+        # 상황을 피한다(같은 트랜잭션이므로 결과는 동일하지만, 실패를
+        # 최대한 일찍 감지하기 위함이다).
+        terms_of_service = terms_repository.get_current_by_code(TERMS_OF_SERVICE_CODE)
+        if terms_of_service is None:
+            raise RequiredTermsNotConfiguredError(
+                f"No current terms configured for code={TERMS_OF_SERVICE_CODE!r}"
+            )
+
+        privacy = terms_repository.get_current_by_code(PRIVACY_CODE)
+        if privacy is None:
+            raise RequiredTermsNotConfiguredError(
+                f"No current terms configured for code={PRIVACY_CODE!r}"
+            )
+
+        ai_analysis = None
+        if onboarding.agree_ai_analysis:
+            ai_analysis = terms_repository.get_current_by_code(AI_ANALYSIS_CODE)
+            if ai_analysis is None:
+                raise RequiredTermsNotConfiguredError(
+                    f"No current terms configured for code={AI_ANALYSIS_CODE!r}"
+                )
+
+        # CLIAR-87: agree_terms/agree_privacy/agree_ai_analysis/agreed_at은
+        # member 테이블 컬럼에서 제거되었다(terms + member_agreement로
+        # 이관됨). member row에는 더 이상 이 값들을 저장하지 않는다.
+        member = User(
+            member_id=identity.user_id,
+            email=normalized_email,
+            nickname=normalized_nickname,
+            status=MemberStatus.ACTIVE,
+        )
         user_repository.create(member)
+
+        member_agreement_repository.create(
+            member_id=identity.user_id,
+            terms_id=terms_of_service.id,
+            action=MemberAgreementAction.AGREE,
+        )
+        member_agreement_repository.create(
+            member_id=identity.user_id,
+            terms_id=privacy.id,
+            action=MemberAgreementAction.AGREE,
+        )
+        if ai_analysis is not None:
+            member_agreement_repository.create(
+                member_id=identity.user_id,
+                terms_id=ai_analysis.id,
+                action=MemberAgreementAction.AGREE,
+            )
+
         user_repository.db.commit()
     except IntegrityError:
         # 사전 중복 검사를 통과했더라도 동시 요청에 의해 DB unique
-        # constraint(user_id/email/nickname)에 최종적으로 걸릴 수 있다.
-        # 이 경우 트랜잭션을 롤백해 불완전한 row가 남지 않도록 한다.
+        # constraint(member_id/email)에 최종적으로 걸릴 수 있다. 이 경우
+        # 트랜잭션을 롤백해 member/agreement 모두 남지 않도록 한다.
         user_repository.db.rollback()
         raise MemberAlreadyExistsError(
             "Member could not be created due to a conflicting record"
         ) from None
+    except RequiredTermsNotConfiguredError:
+        user_repository.db.rollback()
+        raise
+    except Exception:
+        # 약관 AGREE 이력 저장 중 예상치 못한 오류가 발생해도 member
+        # row가 DB에 남지 않도록 같은 트랜잭션을 롤백한다.
+        user_repository.db.rollback()
+        raise
 
     user_repository.db.refresh(member)
     return member
