@@ -8,6 +8,7 @@ CLIAR-87: user_id 요청 필드와 응답의 member_id는 UUID 문자열이다.
 """
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,6 +18,8 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base, get_db
 from app.main import app
+from app.models.member_agreement import MemberAgreement
+from app.models.terms import Terms
 from app.models.user import MemberStatus, User
 
 
@@ -78,9 +81,30 @@ def _create_member(
     return member
 
 
+def _seed_terms(db_session, code):
+    now = datetime.now(timezone.utc)
+    terms = Terms(
+        code=code,
+        name=code,
+        content=f"{code} content",
+        is_required=False,
+        effective_at=now - timedelta(days=1),
+    )
+    db_session.add(terms)
+    db_session.commit()
+    return terms
+
+
+def _seed_required_terms(db_session):
+    """TERMS_OF_SERVICE, PRIVACY를 현재 적용 중인 상태로 생성한다."""
+    _seed_terms(db_session, "TERMS_OF_SERVICE")
+    _seed_terms(db_session, "PRIVACY")
+
+
 class TestBootstrapMember:
 
     def test_creates_member_successfully(self, client, db_session):
+        _seed_required_terms(db_session)
         member_id = str(uuid.uuid4())
         response = client.post(
             ENDPOINT,
@@ -103,6 +127,7 @@ class TestBootstrapMember:
         assert body["nickname"] == "haechan"
 
     def test_member_is_saved_in_database(self, client, db_session):
+        _seed_required_terms(db_session)
         member_id = str(uuid.uuid4())
         client.post(
             ENDPOINT,
@@ -169,6 +194,7 @@ class TestBootstrapValidation:
         """CLIAR-87 확정 요구사항: member.nickname은 UNIQUE 제약이 없으며
         중복을 허용한다. 다른 회원과 동일한 nickname으로도 정상 생성되어야
         한다."""
+        _seed_required_terms(db_session)
         _create_member(
             db_session,
             email="old@example.com",
@@ -234,3 +260,109 @@ class TestBootstrapValidation:
         )
 
         assert response.status_code == 422
+
+
+class TestBootstrapMemberAgreement:
+    """CLIAR-92: 회원 최초 생성 시 member_agreement AGREE 이력 저장."""
+
+    def test_creates_agreements_for_terms_of_service_and_privacy(self, client, db_session):
+        _seed_required_terms(db_session)
+        member_id = str(uuid.uuid4())
+
+        response = client.post(
+            ENDPOINT,
+            json={
+                "user_id": member_id,
+                "email": "test@example.com",
+                "nickname": "haechan",
+                "agree_terms": True,
+                "agree_privacy": True,
+            },
+        )
+
+        assert response.status_code == 201
+
+        member = db_session.query(User).filter(User.member_id == uuid.UUID(member_id)).one()
+        agreements = (
+            db_session.query(MemberAgreement)
+            .filter(MemberAgreement.member_id == member.member_id)
+            .all()
+        )
+        assert len(agreements) == 2
+
+        codes = {
+            db_session.query(Terms).filter(Terms.id == a.terms_id).one().code
+            for a in agreements
+        }
+        assert codes == {"TERMS_OF_SERVICE", "PRIVACY"}
+
+    def test_agree_ai_analysis_true_creates_third_agreement(self, client, db_session):
+        _seed_required_terms(db_session)
+        _seed_terms(db_session, "AI_ANALYSIS")
+        member_id = str(uuid.uuid4())
+
+        response = client.post(
+            ENDPOINT,
+            json={
+                "user_id": member_id,
+                "email": "test@example.com",
+                "nickname": "haechan",
+                "agree_terms": True,
+                "agree_privacy": True,
+                "agree_ai_analysis": True,
+            },
+        )
+
+        assert response.status_code == 201
+
+        member = db_session.query(User).filter(User.member_id == uuid.UUID(member_id)).one()
+        agreements = (
+            db_session.query(MemberAgreement)
+            .filter(MemberAgreement.member_id == member.member_id)
+            .all()
+        )
+        codes = {
+            db_session.query(Terms).filter(Terms.id == a.terms_id).one().code
+            for a in agreements
+        }
+        assert codes == {"TERMS_OF_SERVICE", "PRIVACY", "AI_ANALYSIS"}
+
+    def test_missing_terms_of_service_returns_503_and_no_member_created(
+        self, client, db_session
+    ):
+        """필수 약관이 현재 적용 중인 상태로 없으면 서버 설정 문제로
+        503을 반환하고, member row가 DB에 남지 않아야 한다."""
+        _seed_terms(db_session, "PRIVACY")
+
+        response = client.post(
+            ENDPOINT,
+            json={
+                "user_id": str(uuid.uuid4()),
+                "email": "new@example.com",
+                "nickname": "newnick",
+                "agree_terms": True,
+                "agree_privacy": True,
+            },
+        )
+
+        assert response.status_code == 503
+        assert db_session.query(User).count() == 0
+
+    def test_agree_ai_analysis_true_but_missing_ai_terms_returns_503(self, client, db_session):
+        _seed_required_terms(db_session)
+
+        response = client.post(
+            ENDPOINT,
+            json={
+                "user_id": str(uuid.uuid4()),
+                "email": "new@example.com",
+                "nickname": "newnick",
+                "agree_terms": True,
+                "agree_privacy": True,
+                "agree_ai_analysis": True,
+            },
+        )
+
+        assert response.status_code == 503
+        assert db_session.query(User).count() == 0
+        assert db_session.query(MemberAgreement).count() == 0

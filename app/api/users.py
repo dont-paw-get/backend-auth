@@ -4,6 +4,8 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_member
 from app.core.database import get_db
 from app.models.user import User
+from app.repositories.member_agreement_repository import MemberAgreementRepository
+from app.repositories.terms_repository import TermsRepository
 from app.repositories.user_repository import UserRepository
 from app.schemas.user import (
     MemberBootstrapRequest,
@@ -17,6 +19,7 @@ from app.services.member_service import (
     NicknameAlreadyExistsError,
     OnboardingData,
     RequiredConsentNotAgreedError,
+    RequiredTermsNotConfiguredError,
     TrustedIdentity,
     bootstrap_member,
 )
@@ -92,6 +95,8 @@ def bootstrap_current_member(
     """
 
     repository = UserRepository(db)
+    terms_repository = TermsRepository(db)
+    member_agreement_repository = MemberAgreementRepository(db)
 
 
     identity = TrustedIdentity(
@@ -114,6 +119,8 @@ def bootstrap_current_member(
             identity,
             onboarding,
             repository,
+            terms_repository,
+            member_agreement_repository,
         )
 
 
@@ -136,6 +143,15 @@ def bootstrap_current_member(
 
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+    except RequiredTermsNotConfiguredError as e:
+        # 사용자 입력 문제가 아니라 서버(운영) 설정 문제이므로 400/409가
+        # 아니라 서버 오류로 응답한다.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(e),
         )
 
