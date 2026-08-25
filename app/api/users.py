@@ -1,8 +1,12 @@
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_member
+from app.core.cognito import get_cognito_user_email
 from app.core.database import get_db
+from app.core.security import bearer_scheme, get_current_access_token, get_current_user_id
 from app.models.user import User
 from app.repositories.member_agreement_repository import MemberAgreementRepository
 from app.repositories.terms_repository import TermsRepository
@@ -28,6 +32,10 @@ from app.services.member_service import (
 router = APIRouter(
     prefix="/api/v1/users",
     tags=["users"],
+    # Swagger UI 상단 "Authorize"에서 Bearer Access Token을 입력할 수
+    # 있도록 노출한다(GET/PATCH /me, POST /bootstrap 모두 적용).
+    # 실제 인증/거부 로직은 여전히 get_current_user_id 등이 담당한다.
+    dependencies=[Depends(bearer_scheme)],
 )
 
 
@@ -85,14 +93,39 @@ def update_current_member(
 )
 def bootstrap_current_member(
     payload: MemberBootstrapRequest,
+    user_id: str = Depends(get_current_user_id),
+    access_token: str = Depends(get_current_access_token),
     db: Session = Depends(get_db),
 ):
     """
     Cognito 인증 완료 후 MEMBER 최초 생성
 
-    Cognito sub(user_id) + onboarding 정보
-    -> MEMBER 생성
+    CLIAR-105: member_id(Cognito sub)와 email은 client request body가
+    아니라 Authorization의 검증된 Cognito Access Token(sub)과 Cognito
+    GetUser 응답(email)에서만 얻는다. GET/PATCH /users/me와 동일한
+    get_current_user_id 인증 경로를 재사용한다.
     """
+
+    try:
+        member_id = uuid.UUID(user_id)
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authenticated identity is not a valid UUID",
+        )
+
+    try:
+        email = get_cognito_user_email(access_token)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Cognito rejected the access token",
+        )
+    except RuntimeError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not retrieve user information from Cognito",
+        )
 
     repository = UserRepository(db)
     terms_repository = TermsRepository(db)
@@ -100,8 +133,8 @@ def bootstrap_current_member(
 
 
     identity = TrustedIdentity(
-        user_id=payload.user_id,
-        email=payload.email,
+        user_id=member_id,
+        email=email,
     )
 
 

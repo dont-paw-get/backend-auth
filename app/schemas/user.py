@@ -62,25 +62,25 @@ class MemberBootstrapRequest(BaseModel):
     """
     Cognito 인증 완료 후 MEMBER 최초 생성 요청 schema.
 
-    user_id:
-        Cognito sub 값(UUID). member.member_id에 그대로 저장된다.
-
-    email:
-        Cognito 인증 email
+    CLIAR-105: user_id/email은 더 이상 request body로 받지 않는다.
+    Client가 임의의 user_id/email을 보내 서버의 identity 판단을
+    좌우할 수 있는 구조는 최종 Cognito 인증 구조와 맞지 않기 때문이다.
+    member_id(Cognito sub)와 email은 Authorization 헤더의 검증된
+    Cognito Access Token과 Cognito GetUser 응답에서만 얻는다
+    (app/api/users.py의 bootstrap_current_member 참고).
 
     nickname:
         서비스 nickname
 
     agree_terms/privacy:
-        필수 동의(이번 CLIAR-87 범위에서는 검증만 하고 member_agreement에
-        저장하는 로직은 포함하지 않는다)
+        필수 동의(값 검증만 하고, 실제 이력은 member_agreement에 저장한다)
 
     agree_ai_analysis:
         선택 동의
     """
 
-    user_id: UUID
-    email: str
+    model_config = ConfigDict(extra="forbid")
+
     nickname: str | None
 
     agree_terms: bool
