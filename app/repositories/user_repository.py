@@ -1,9 +1,10 @@
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.user import User
+from app.models.user import MemberStatus, User
 
 
 class UserRepository:
@@ -64,5 +65,28 @@ class UserRepository:
         트랜잭션 경계 안에서 감지하고 롤백할 수 있다.
         """
         self.db.add(member)
+        self.db.flush()
+        return member
+
+    def mark_withdrawn(self, member: User) -> User:
+        """
+        회원탈퇴 처리 1단계: status를 WITHDRAWN으로 변경한다.
+
+        deleted_at은 건드리지 않는다(이 시점에서는 아직 Cognito 삭제가
+        완료되지 않았으므로, "탈퇴 처리 중"과 "탈퇴 완료"를
+        deleted_at 유무로 구분한다). add + flush까지만 담당하고
+        commit/rollback은 호출자(service)의 책임으로 둔다.
+        """
+        member.status = MemberStatus.WITHDRAWN
+        self.db.flush()
+        return member
+
+    def mark_deleted_now(self, member: User) -> User:
+        """
+        회원탈퇴 처리 2단계: Cognito 삭제 완료 후 deleted_at을 현재
+        UTC 시각으로 기록한다. add + flush까지만 담당하고
+        commit/rollback은 호출자(service)의 책임으로 둔다.
+        """
+        member.deleted_at = datetime.now(timezone.utc)
         self.db.flush()
         return member

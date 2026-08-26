@@ -19,6 +19,11 @@ from app.repositories.member_agreement_repository import MemberAgreementReposito
 from app.repositories.terms_repository import TermsRepository
 from app.repositories.user_repository import UserRepository
 
+# CLIAR-113: 회원탈퇴 시 로그에 남길 수 있는 값(sub)만 사용하고, 이 모듈은
+# Cognito SDK를 직접 다루지 않는다(bootstrap과 동일한 관례: Cognito 호출은
+# app/api/users.py가 담당하고, 이 모듈은 DB 상태 전이와 commit 경계만
+# 책임진다).
+
 # CLIAR-92: 회원 최초 생성 시 동의 이력을 남길 약관 code.
 TERMS_OF_SERVICE_CODE = "TERMS_OF_SERVICE"
 PRIVACY_CODE = "PRIVACY"
@@ -88,6 +93,14 @@ class NicknameAlreadyExistsError(MemberBootstrapError):
     CLIAR-87 확정 요구사항: member.nickname은 UNIQUE 제약이 없으며
     중복을 허용한다. bootstrap_member는 더 이상 nickname 중복을
     이유로 이 예외를 발생시키지 않는다.
+    """
+
+
+class MemberWithdrawalPersistenceError(MemberBootstrapError):
+    """
+    회원탈퇴 처리 중 member row의 상태 변경(commit)이 실패한 경우
+    발생한다. 트랜잭션은 이미 rollback된 상태이며, 호출자는 이를
+    사용자 입력 문제가 아닌 서버 오류로 변환해야 한다.
     """
 
 
@@ -225,6 +238,66 @@ def bootstrap_member(
         # row가 DB에 남지 않도록 같은 트랜잭션을 롤백한다.
         user_repository.db.rollback()
         raise
+
+    user_repository.db.refresh(member)
+    return member
+
+
+def start_withdrawal(member: User, user_repository: UserRepository) -> User:
+    """
+    회원탈퇴 1단계: member.status를 ACTIVE -> WITHDRAWN으로 변경하고
+    즉시 commit한다.
+
+    CLIAR-113 탈퇴 처리 순서:
+      1. status=WITHDRAWN으로 변경 + commit (이 함수)
+      2. 이 시점부터 GET/PATCH /users/me 등 일반 API 접근은
+         get_current_member(app/api/deps.py)가 403으로 차단한다.
+      3. Cognito DeleteUser 호출(이 함수 밖, app/api/users.py가 담당)
+      4. Cognito 삭제 성공 후 deleted_at 기록(complete_withdrawal)
+
+    이 단계와 Cognito DeleteUser 호출은 서로 다른 시스템에 대한 별도
+    작업이므로 하나의 DB 트랜잭션으로 묶을 수 없다. 따라서 이 단계는
+    독립적으로 commit하며, 이후 Cognito 호출이 실패해도 이미 커밋된
+    WITHDRAWN 상태는 되돌리지 않는다(재시도는 status=WITHDRAWN,
+    deleted_at=NULL 상태에서 DELETE /users/me를 다시 호출하는 것으로
+    처리한다).
+
+    이미 WITHDRAWN인 member(재시도 케이스, deleted_at 여부 무관)에
+    대해서는 이 함수를 호출하지 않고 호출자가 그대로 다음 단계로
+    진행해야 한다. 이 함수는 status가 ACTIVE인 경우에만 호출된다는
+    전제 하에 동작한다.
+    """
+    try:
+        user_repository.mark_withdrawn(member)
+        user_repository.db.commit()
+    except Exception as e:
+        user_repository.db.rollback()
+        raise MemberWithdrawalPersistenceError(
+            "Failed to mark member as withdrawn"
+        ) from e
+
+    user_repository.db.refresh(member)
+    return member
+
+
+def complete_withdrawal(member: User, user_repository: UserRepository) -> User:
+    """
+    회원탈퇴 2단계: Cognito DeleteUser 성공 후 member.deleted_at을
+    현재 UTC 시각으로 기록하고 commit한다.
+
+    이 함수가 호출되기 전에 이미 member.status는 WITHDRAWN이어야
+    한다(start_withdrawal 또는 이전 시도에서 이미 설정됨). 호출자
+    (app/api/users.py)가 status=WITHDRAWN, deleted_at=NULL인 회원에
+    대해서만 Cognito DeleteUser를 호출한 뒤 이 함수를 호출한다.
+    """
+    try:
+        user_repository.mark_deleted_now(member)
+        user_repository.db.commit()
+    except Exception as e:
+        user_repository.db.rollback()
+        raise MemberWithdrawalPersistenceError(
+            "Failed to record member deletion timestamp"
+        ) from e
 
     user_repository.db.refresh(member)
     return member
