@@ -1,8 +1,8 @@
-# EKS Auto Mode ALB 용 IngressClass 설정 (클러스터 전역, 한 번만 적용)
+# EKS Auto Mode ALB 용 IngressClass 설정 (클러스터 전역, 클러스터마다 1회 적용)
 #   kubectl apply -f k8s/cluster/ingressclass-alb.yaml
 #
-# dev/prod 두 환경의 Ingress 가 이 IngressClass(alb) 를 공유합니다.
-# (Ingress 마다 별도의 ALB 가 생성됨)
+# ⚠️ dev(dpyb-dev)/prod(dpyb-prod) 는 별도 클러스터이므로 "공유"되지 않습니다.
+#    각 클러스터 컨텍스트에서 각각 apply 하세요. (Ingress 마다 별도의 ALB 가 생성됨)
 ---
 apiVersion: eks.amazonaws.com/v1
 kind: IngressClassParams
