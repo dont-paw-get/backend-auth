@@ -13,7 +13,12 @@ sys.path.insert(0, os.getcwd())
 
 from app.core.config import settings  # noqa: E402
 from app.core.database import Base  # noqa: E402
-from app.models import user  # noqa: E402,F401  (ensures model is registered on Base.metadata)
+from app.models import (  # noqa: E402,F401  (ensures models are registered on Base.metadata)
+    member_agreement,
+    member_librarian,
+    terms,
+    user,
+)
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

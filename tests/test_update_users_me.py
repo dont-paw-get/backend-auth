@@ -3,9 +3,13 @@ PATCH /api/v1/users/me 테스트.
 
 실제 Cognito/AWS 없이 검증하기 위해 기존 test_users_me.py와 동일한
 in-memory SQLite + dependency override 패턴을 재사용한다.
+
+CLIAR-87: agree_ai_analysis는 member 컬럼에서 제거되어 더 이상 이 API로
+수정할 수 없다(MemberUpdateRequest에서 필드 자체가 제거됨). 인증
+sub/member_id는 UUID 문자열이다.
 """
 
-from datetime import datetime, timezone
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,7 +20,7 @@ from sqlalchemy.pool import StaticPool
 from app.core.database import Base, get_db
 from app.core.security import get_current_user_id
 from app.main import app
-from app.models.user import User
+from app.models.user import MemberStatus, User
 
 ENDPOINT = "/api/v1/users/me"
 
@@ -54,22 +58,17 @@ def client(db_session):
 
 def _create_member(
     db_session,
-    user_id="cognito-sub-0001",
+    member_id,
     email=None,
     nickname=None,
     profile_image_url="https://cdn.example.com/old.png",
-    agree_ai_analysis=False,
 ):
-    now = datetime.now(timezone.utc)
     member = User(
-        user_id=user_id,
-        email=email or f"{user_id}@example.com",
-        nickname=nickname or f"nick-{user_id}",
+        member_id=member_id,
+        email=email or f"{member_id}@example.com",
+        nickname=nickname or f"nick-{member_id.hex[:8]}",
         profile_image_url=profile_image_url,
-        agree_ai_analysis=agree_ai_analysis,
-        agree_terms=True,
-        agree_privacy=True,
-        agreed_at=now,
+        status=MemberStatus.ACTIVE,
     )
     db_session.add(member)
     db_session.commit()
@@ -77,14 +76,15 @@ def _create_member(
     return member
 
 
-def _authenticate_as(user_id):
-    app.dependency_overrides[get_current_user_id] = lambda: user_id
+def _authenticate_as(member_id):
+    app.dependency_overrides[get_current_user_id] = lambda: str(member_id)
 
 
 class TestPatchUsersMeAllowedFields:
     def test_updates_nickname_only(self, client, db_session):
-        _create_member(db_session, user_id="sub-1", nickname="old-name")
-        _authenticate_as("sub-1")
+        member_id = uuid.uuid4()
+        _create_member(db_session, member_id, nickname="old-name")
+        _authenticate_as(member_id)
 
         response = client.patch(ENDPOINT, json={"nickname": "new-name"})
 
@@ -92,11 +92,11 @@ class TestPatchUsersMeAllowedFields:
         body = response.json()
         assert body["nickname"] == "new-name"
         assert body["profile_image_url"] == "https://cdn.example.com/old.png"
-        assert body["agree_ai_analysis"] is False
 
     def test_updates_profile_image_url_only(self, client, db_session):
-        _create_member(db_session, user_id="sub-1", nickname="keep-name")
-        _authenticate_as("sub-1")
+        member_id = uuid.uuid4()
+        _create_member(db_session, member_id, nickname="keep-name")
+        _authenticate_as(member_id)
 
         response = client.patch(
             ENDPOINT, json={"profile_image_url": "https://cdn.example.com/new.png"}
@@ -108,37 +108,29 @@ class TestPatchUsersMeAllowedFields:
         assert body["nickname"] == "keep-name"
 
     def test_removes_profile_image_url_with_explicit_null(self, client, db_session):
+        member_id = uuid.uuid4()
         _create_member(
             db_session,
-            user_id="sub-1",
+            member_id,
             profile_image_url="https://cdn.example.com/old.png",
         )
-        _authenticate_as("sub-1")
+        _authenticate_as(member_id)
 
         response = client.patch(ENDPOINT, json={"profile_image_url": None})
 
         assert response.status_code == 200
         assert response.json()["profile_image_url"] is None
 
-    def test_updates_agree_ai_analysis_only(self, client, db_session):
-        _create_member(db_session, user_id="sub-1", agree_ai_analysis=False)
-        _authenticate_as("sub-1")
-
-        response = client.patch(ENDPOINT, json={"agree_ai_analysis": True})
-
-        assert response.status_code == 200
-        assert response.json()["agree_ai_analysis"] is True
-
     def test_updates_multiple_fields_at_once(self, client, db_session):
-        _create_member(db_session, user_id="sub-1", nickname="old-name", agree_ai_analysis=False)
-        _authenticate_as("sub-1")
+        member_id = uuid.uuid4()
+        _create_member(db_session, member_id, nickname="old-name")
+        _authenticate_as(member_id)
 
         response = client.patch(
             ENDPOINT,
             json={
                 "nickname": "new-name",
                 "profile_image_url": "https://cdn.example.com/new.png",
-                "agree_ai_analysis": True,
             },
         )
 
@@ -146,17 +138,16 @@ class TestPatchUsersMeAllowedFields:
         body = response.json()
         assert body["nickname"] == "new-name"
         assert body["profile_image_url"] == "https://cdn.example.com/new.png"
-        assert body["agree_ai_analysis"] is True
 
     def test_fields_not_in_request_remain_unchanged(self, client, db_session):
+        member_id = uuid.uuid4()
         _create_member(
             db_session,
-            user_id="sub-1",
+            member_id,
             nickname="unchanged-name",
             profile_image_url="https://cdn.example.com/unchanged.png",
-            agree_ai_analysis=True,
         )
-        _authenticate_as("sub-1")
+        _authenticate_as(member_id)
 
         response = client.patch(ENDPOINT, json={})
 
@@ -164,13 +155,24 @@ class TestPatchUsersMeAllowedFields:
         body = response.json()
         assert body["nickname"] == "unchanged-name"
         assert body["profile_image_url"] == "https://cdn.example.com/unchanged.png"
-        assert body["agree_ai_analysis"] is True
+
+    def test_agree_ai_analysis_field_is_no_longer_accepted(self, client, db_session):
+        """CLIAR-87: agree_ai_analysis는 member 컬럼에서 제거되어 이 스키마
+        (extra="forbid")가 더 이상 허용하지 않는다."""
+        member_id = uuid.uuid4()
+        _create_member(db_session, member_id)
+        _authenticate_as(member_id)
+
+        response = client.patch(ENDPOINT, json={"agree_ai_analysis": True})
+
+        assert response.status_code == 422
 
 
 class TestPatchUsersMeNicknameValidation:
     def test_nickname_null_is_rejected_without_db_error(self, client, db_session):
-        _create_member(db_session, user_id="sub-1", nickname="old-name")
-        _authenticate_as("sub-1")
+        member_id = uuid.uuid4()
+        _create_member(db_session, member_id, nickname="old-name")
+        _authenticate_as(member_id)
 
         response = client.patch(ENDPOINT, json={"nickname": None})
 
@@ -180,92 +182,202 @@ class TestPatchUsersMeNicknameValidation:
 
         # nickname이 실제로 변경되지 않았는지(=commit되지 않았는지) 확인.
         db_session.expire_all()
-        stored = db_session.get(User, "sub-1")
+        stored = db_session.query(User).filter(User.member_id == member_id).one()
         assert stored.nickname == "old-name"
 
     def test_nickname_empty_string_is_rejected(self, client, db_session):
-        _create_member(db_session, user_id="sub-1", nickname="old-name")
-        _authenticate_as("sub-1")
+        member_id = uuid.uuid4()
+        _create_member(db_session, member_id, nickname="old-name")
+        _authenticate_as(member_id)
 
         response = client.patch(ENDPOINT, json={"nickname": ""})
 
         assert response.status_code == 422
 
     def test_nickname_blank_string_is_rejected(self, client, db_session):
-        _create_member(db_session, user_id="sub-1", nickname="old-name")
-        _authenticate_as("sub-1")
+        member_id = uuid.uuid4()
+        _create_member(db_session, member_id, nickname="old-name")
+        _authenticate_as(member_id)
 
         response = client.patch(ENDPOINT, json={"nickname": "   "})
 
         assert response.status_code == 422
 
     def test_nickname_is_trimmed_before_saving(self, client, db_session):
-        _create_member(db_session, user_id="sub-1", nickname="old-name")
-        _authenticate_as("sub-1")
+        member_id = uuid.uuid4()
+        _create_member(db_session, member_id, nickname="old-name")
+        _authenticate_as(member_id)
 
         response = client.patch(ENDPOINT, json={"nickname": "  new-name  "})
 
         assert response.status_code == 200
         assert response.json()["nickname"] == "new-name"
 
-    def test_nickname_conflict_check_uses_trimmed_value(self, client, db_session):
-        _create_member(db_session, user_id="sub-1", nickname="my-name")
-        _create_member(db_session, user_id="sub-2", nickname="used-name")
-        _authenticate_as("sub-1")
+    def test_nickname_matching_another_member_after_trim_is_allowed(self, client, db_session):
+        """CLIAR-87: nickname 중복은 허용되므로, trim된 값이 다른 회원의
+        nickname과 같아도 409가 아니라 200이어야 한다."""
+        member_id_a = uuid.uuid4()
+        member_id_b = uuid.uuid4()
+        _create_member(db_session, member_id_a, nickname="my-name")
+        _create_member(db_session, member_id_b, nickname="used-name")
+        _authenticate_as(member_id_a)
 
         response = client.patch(ENDPOINT, json={"nickname": "  used-name  "})
 
-        assert response.status_code == 409
+        assert response.status_code == 200
+        assert response.json()["nickname"] == "used-name"
 
 
 class TestPatchUsersMeNicknameConflict:
     def test_resubmitting_own_current_nickname_does_not_conflict(self, client, db_session):
-        _create_member(db_session, user_id="sub-1", nickname="same-name")
-        _authenticate_as("sub-1")
+        member_id = uuid.uuid4()
+        _create_member(db_session, member_id, nickname="same-name")
+        _authenticate_as(member_id)
 
         response = client.patch(ENDPOINT, json={"nickname": "same-name"})
 
         assert response.status_code == 200
         assert response.json()["nickname"] == "same-name"
 
-    def test_nickname_already_used_by_another_member_returns_409(self, client, db_session):
-        _create_member(db_session, user_id="sub-1", nickname="my-name")
-        _create_member(db_session, user_id="sub-2", nickname="taken-name")
-        _authenticate_as("sub-1")
+    def test_nickname_already_used_by_another_member_is_allowed(self, client, db_session):
+        """CLIAR-87 확정 요구사항: member.nickname은 UNIQUE 제약이 없으며
+        중복을 허용한다. 다른 회원이 이미 사용 중인 nickname으로
+        변경해도 409가 아니라 200이어야 한다."""
+        member_id_a = uuid.uuid4()
+        member_id_b = uuid.uuid4()
+        _create_member(db_session, member_id_a, nickname="my-name")
+        _create_member(db_session, member_id_b, nickname="taken-name")
+        _authenticate_as(member_id_a)
 
         response = client.patch(ENDPOINT, json={"nickname": "taken-name"})
 
-        assert response.status_code == 409
+        assert response.status_code == 200
+        assert response.json()["nickname"] == "taken-name"
 
 
 class TestPatchUsersMeAuthAndNotFound:
     def test_returns_404_when_member_not_found(self, client):
-        _authenticate_as("unknown-sub")
+        _authenticate_as(uuid.uuid4())
 
         response = client.patch(ENDPOINT, json={"nickname": "whatever"})
 
         assert response.status_code == 404
 
-    def test_returns_501_when_auth_integration_not_overridden(self, client):
+    def test_returns_401_when_auth_integration_not_overridden(self, client):
+        """CLIAR-105: Cognito 인증 연동이 실제로 구현되었으므로 더 이상
+        501(CLIAR-71 시절의 임시 정책)이 아니라 401을 반환해야 한다."""
         response = client.patch(ENDPOINT, json={"nickname": "whatever"})
 
-        assert response.status_code == 501
+        assert response.status_code == 401
 
 
 class TestPatchUsersMeDisallowedFields:
     def test_disallowed_field_in_body_is_rejected(self, client, db_session):
-        _create_member(db_session, user_id="sub-1")
-        _authenticate_as("sub-1")
+        member_id = uuid.uuid4()
+        _create_member(db_session, member_id)
+        _authenticate_as(member_id)
 
         response = client.patch(ENDPOINT, json={"email": "hacker@example.com"})
 
         # extra="forbid" 설정으로 FastAPI/Pydantic이 자동으로 422를 반환한다.
         assert response.status_code == 422
 
-    def test_user_id_in_body_is_rejected(self, client, db_session):
-        _create_member(db_session, user_id="sub-1")
-        _authenticate_as("sub-1")
+    def test_member_id_in_body_is_rejected(self, client, db_session):
+        member_id = uuid.uuid4()
+        _create_member(db_session, member_id)
+        _authenticate_as(member_id)
 
-        response = client.patch(ENDPOINT, json={"user_id": "someone-else"})
+        response = client.patch(ENDPOINT, json={"member_id": str(uuid.uuid4())})
 
         assert response.status_code == 422
+
+
+class TestPatchUsersMeBirthDateAndGender:
+    """CLIAR-120: PATCH /users/me로 birth_date/gender 부분 수정."""
+
+    def test_updates_birth_date_only(self, client, db_session):
+        member_id = uuid.uuid4()
+        _create_member(db_session, member_id, nickname="keep-name")
+        _authenticate_as(member_id)
+
+        response = client.patch(ENDPOINT, json={"birth_date": "2001-03-21"})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["birth_date"] == "2001-03-21"
+        assert body["nickname"] == "keep-name"
+
+    def test_updates_gender_only(self, client, db_session):
+        member_id = uuid.uuid4()
+        _create_member(db_session, member_id, nickname="keep-name")
+        _authenticate_as(member_id)
+
+        response = client.patch(ENDPOINT, json={"gender": "FEMALE"})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["gender"] == "FEMALE"
+        assert body["nickname"] == "keep-name"
+
+    def test_updates_birth_date_and_gender_together(self, client, db_session):
+        member_id = uuid.uuid4()
+        _create_member(db_session, member_id)
+        _authenticate_as(member_id)
+
+        response = client.patch(
+            ENDPOINT, json={"birth_date": "1999-12-31", "gender": "MALE"}
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["birth_date"] == "1999-12-31"
+        assert body["gender"] == "MALE"
+
+    def test_invalid_gender_returns_422(self, client, db_session):
+        member_id = uuid.uuid4()
+        _create_member(db_session, member_id)
+        _authenticate_as(member_id)
+
+        response = client.patch(ENDPOINT, json={"gender": "OTHER"})
+
+        assert response.status_code == 422
+
+    def test_invalid_birth_date_returns_422(self, client, db_session):
+        member_id = uuid.uuid4()
+        _create_member(db_session, member_id)
+        _authenticate_as(member_id)
+
+        response = client.patch(ENDPOINT, json={"birth_date": "2002-13-40"})
+
+        assert response.status_code == 422
+
+    def test_slash_formatted_birth_date_returns_422(self, client, db_session):
+        member_id = uuid.uuid4()
+        _create_member(db_session, member_id)
+        _authenticate_as(member_id)
+
+        response = client.patch(ENDPOINT, json={"birth_date": "2002/05/17"})
+
+        assert response.status_code == 422
+
+    def test_fields_not_sent_remain_unchanged(self, client, db_session):
+        """birth_date/gender를 이미 갖고 있는 member가 다른 필드만 PATCH해도
+        기존 birth_date/gender 값이 유지되어야 한다."""
+        from datetime import date
+
+        from app.models.user import Gender
+
+        member_id = uuid.uuid4()
+        member = _create_member(db_session, member_id, nickname="old-name")
+        member.birth_date = date(2000, 1, 1)
+        member.gender = Gender.MALE
+        db_session.commit()
+        _authenticate_as(member_id)
+
+        response = client.patch(ENDPOINT, json={"nickname": "new-name"})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["nickname"] == "new-name"
+        assert body["birth_date"] == "2000-01-01"
+        assert body["gender"] == "MALE"

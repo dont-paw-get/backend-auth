@@ -1,0 +1,22 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: backend-auth-dev
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/dont-paw-get/backend-auth.git
+    targetRevision: develop          # 개발 브랜치를 추적
+    path: k8s/overlays/dev           # dev overlay 적용 (Kustomize 자동 인식)
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: dpyb-auth-dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
