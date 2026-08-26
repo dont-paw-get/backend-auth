@@ -264,3 +264,114 @@ class TestGetCognitoUserEmail:
 
         with pytest.raises(RuntimeError):
             cognito.get_cognito_user_email("some-access-token")
+
+
+class TestDeleteCognitoUser:
+    """
+    CLIAR-113: DeleteUser(access token 기반 self-service 삭제) 테스트.
+
+    boto3 client 자체를 monkeypatch하여 실제 AWS/Cognito에 접속하지
+    않는다.
+    """
+
+    def _patch_client(self, monkeypatch, fake_client):
+        monkeypatch.setattr(cognito, "get_cognito_idp_client", lambda: fake_client)
+
+    def test_calls_delete_user_with_access_token(self, monkeypatch):
+        received = {}
+
+        class _FakeClient:
+            def delete_user(self, AccessToken):
+                received["AccessToken"] = AccessToken
+
+        self._patch_client(monkeypatch, _FakeClient())
+
+        cognito.delete_cognito_user("some-access-token", sub="cognito-sub-0001")
+
+        assert received["AccessToken"] == "some-access-token"
+
+    def test_success_returns_none(self, monkeypatch):
+        class _FakeClient:
+            def delete_user(self, AccessToken):
+                return None
+
+        self._patch_client(monkeypatch, _FakeClient())
+
+        result = cognito.delete_cognito_user("some-access-token", sub="cognito-sub-0001")
+
+        assert result is None
+
+    def test_user_not_found_raises_already_deleted_error(self, monkeypatch):
+        """
+        DeleteUser는 username이 아니라 access token으로만 대상을
+        특정하므로, UserNotFoundException은 "이 토큰이 가리키던
+        사용자가 이미 User Pool에 없다"로만 안전하게 해석할 수 있다.
+        """
+        from botocore.exceptions import ClientError
+
+        class _FakeClient:
+            def delete_user(self, AccessToken):
+                raise ClientError(
+                    {"Error": {"Code": "UserNotFoundException", "Message": "not found"}},
+                    "DeleteUser",
+                )
+
+        self._patch_client(monkeypatch, _FakeClient())
+
+        with pytest.raises(cognito.CognitoUserAlreadyDeletedError):
+            cognito.delete_cognito_user("some-access-token", sub="cognito-sub-0001")
+
+    def test_not_authorized_raises_value_error_not_already_deleted(self, monkeypatch):
+        """
+        NotAuthorizedException만으로는 토큰이 무효한 것과 사용자가
+        이미 삭제된 것을 구분할 수 없으므로, 이를 성공(이미 삭제됨)으로
+        간주하지 않고 ValueError(401 매핑용)로 처리해야 한다.
+        """
+        from botocore.exceptions import ClientError
+
+        class _FakeClient:
+            def delete_user(self, AccessToken):
+                raise ClientError(
+                    {"Error": {"Code": "NotAuthorizedException", "Message": "invalid"}},
+                    "DeleteUser",
+                )
+
+        self._patch_client(monkeypatch, _FakeClient())
+
+        with pytest.raises(ValueError):
+            cognito.delete_cognito_user("some-access-token", sub="cognito-sub-0001")
+
+        # NotAuthorizedException은 CognitoUserAlreadyDeletedError가 아니다.
+        try:
+            cognito.delete_cognito_user("some-access-token", sub="cognito-sub-0001")
+        except cognito.CognitoUserAlreadyDeletedError:
+            pytest.fail("NotAuthorizedException must not be treated as already-deleted")
+        except ValueError:
+            pass
+
+    def test_service_error_raises_runtime_error(self, monkeypatch):
+        from botocore.exceptions import ClientError
+
+        class _FakeClient:
+            def delete_user(self, AccessToken):
+                raise ClientError(
+                    {"Error": {"Code": "InternalErrorException", "Message": "boom"}},
+                    "DeleteUser",
+                )
+
+        self._patch_client(monkeypatch, _FakeClient())
+
+        with pytest.raises(RuntimeError):
+            cognito.delete_cognito_user("some-access-token", sub="cognito-sub-0001")
+
+    def test_network_failure_raises_runtime_error(self, monkeypatch):
+        from botocore.exceptions import EndpointConnectionError
+
+        class _FakeClient:
+            def delete_user(self, AccessToken):
+                raise EndpointConnectionError(endpoint_url="https://cognito-idp.example.com")
+
+        self._patch_client(monkeypatch, _FakeClient())
+
+        with pytest.raises(RuntimeError):
+            cognito.delete_cognito_user("some-access-token", sub="cognito-sub-0001")
