@@ -290,3 +290,94 @@ class TestPatchUsersMeDisallowedFields:
         response = client.patch(ENDPOINT, json={"member_id": str(uuid.uuid4())})
 
         assert response.status_code == 422
+
+
+class TestPatchUsersMeBirthDateAndGender:
+    """CLIAR-120: PATCH /users/me로 birth_date/gender 부분 수정."""
+
+    def test_updates_birth_date_only(self, client, db_session):
+        member_id = uuid.uuid4()
+        _create_member(db_session, member_id, nickname="keep-name")
+        _authenticate_as(member_id)
+
+        response = client.patch(ENDPOINT, json={"birth_date": "2001-03-21"})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["birth_date"] == "2001-03-21"
+        assert body["nickname"] == "keep-name"
+
+    def test_updates_gender_only(self, client, db_session):
+        member_id = uuid.uuid4()
+        _create_member(db_session, member_id, nickname="keep-name")
+        _authenticate_as(member_id)
+
+        response = client.patch(ENDPOINT, json={"gender": "FEMALE"})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["gender"] == "FEMALE"
+        assert body["nickname"] == "keep-name"
+
+    def test_updates_birth_date_and_gender_together(self, client, db_session):
+        member_id = uuid.uuid4()
+        _create_member(db_session, member_id)
+        _authenticate_as(member_id)
+
+        response = client.patch(
+            ENDPOINT, json={"birth_date": "1999-12-31", "gender": "MALE"}
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["birth_date"] == "1999-12-31"
+        assert body["gender"] == "MALE"
+
+    def test_invalid_gender_returns_422(self, client, db_session):
+        member_id = uuid.uuid4()
+        _create_member(db_session, member_id)
+        _authenticate_as(member_id)
+
+        response = client.patch(ENDPOINT, json={"gender": "OTHER"})
+
+        assert response.status_code == 422
+
+    def test_invalid_birth_date_returns_422(self, client, db_session):
+        member_id = uuid.uuid4()
+        _create_member(db_session, member_id)
+        _authenticate_as(member_id)
+
+        response = client.patch(ENDPOINT, json={"birth_date": "2002-13-40"})
+
+        assert response.status_code == 422
+
+    def test_slash_formatted_birth_date_returns_422(self, client, db_session):
+        member_id = uuid.uuid4()
+        _create_member(db_session, member_id)
+        _authenticate_as(member_id)
+
+        response = client.patch(ENDPOINT, json={"birth_date": "2002/05/17"})
+
+        assert response.status_code == 422
+
+    def test_fields_not_sent_remain_unchanged(self, client, db_session):
+        """birth_date/gender를 이미 갖고 있는 member가 다른 필드만 PATCH해도
+        기존 birth_date/gender 값이 유지되어야 한다."""
+        from datetime import date
+
+        from app.models.user import Gender
+
+        member_id = uuid.uuid4()
+        member = _create_member(db_session, member_id, nickname="old-name")
+        member.birth_date = date(2000, 1, 1)
+        member.gender = Gender.MALE
+        db_session.commit()
+        _authenticate_as(member_id)
+
+        response = client.patch(ENDPOINT, json={"nickname": "new-name"})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["nickname"] == "new-name"
+        assert body["birth_date"] == "2000-01-01"
+        assert body["gender"] == "MALE"

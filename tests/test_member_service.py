@@ -18,7 +18,7 @@ member_agreement에 저장한다. 필수 약관이 DB에 현재 적용 중인 �
 """
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 from app.core.database import Base
 from app.models.member_agreement import MemberAgreement, MemberAgreementAction
 from app.models.terms import Terms
-from app.models.user import MemberStatus, User
+from app.models.user import Gender, MemberStatus, User
 from app.repositories.member_agreement_repository import MemberAgreementRepository
 from app.repositories.terms_repository import TermsRepository
 from app.repositories.user_repository import UserRepository
@@ -154,7 +154,11 @@ class TestBootstrapMemberSuccess:
         _seed_required_terms(db_session)
         member_id = uuid.uuid4()
         identity = TrustedIdentity(user_id=member_id, email="new@example.com")
-        onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=True)
+        onboarding = OnboardingData(
+            nickname="newnick",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=True)
 
         member = _bootstrap(
             identity, onboarding, user_repository, terms_repository, member_agreement_repository
@@ -167,7 +171,11 @@ class TestBootstrapMemberSuccess:
     ):
         _seed_required_terms(db_session)
         identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
-        onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=True)
+        onboarding = OnboardingData(
+            nickname="newnick",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=True)
 
         member = _bootstrap(
             identity, onboarding, user_repository, terms_repository, member_agreement_repository
@@ -180,7 +188,11 @@ class TestBootstrapMemberSuccess:
     ):
         _seed_required_terms(db_session)
         identity = TrustedIdentity(user_id=uuid.uuid4(), email="  New@Example.COM  ")
-        onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=True)
+        onboarding = OnboardingData(
+            nickname="newnick",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=True)
 
         member = _bootstrap(
             identity, onboarding, user_repository, terms_repository, member_agreement_repository
@@ -193,7 +205,11 @@ class TestBootstrapMemberSuccess:
     ):
         _seed_required_terms(db_session)
         identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
-        onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=True)
+        onboarding = OnboardingData(
+            nickname="newnick",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=True)
 
         member = _bootstrap(
             identity, onboarding, user_repository, terms_repository, member_agreement_repository
@@ -206,7 +222,11 @@ class TestBootstrapMemberSuccess:
     ):
         _seed_required_terms(db_session)
         identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
-        onboarding = OnboardingData(nickname="  newnick  ", agree_terms=True, agree_privacy=True)
+        onboarding = OnboardingData(
+            nickname="  newnick  ",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=True)
 
         member = _bootstrap(
             identity, onboarding, user_repository, terms_repository, member_agreement_repository
@@ -221,7 +241,11 @@ class TestBootstrapMemberSuccess:
         (PENDING은 최종 스키마에 존재하지 않는다)."""
         _seed_required_terms(db_session)
         identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
-        onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=True)
+        onboarding = OnboardingData(
+            nickname="newnick",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=True)
 
         member = _bootstrap(
             identity, onboarding, user_repository, terms_repository, member_agreement_repository
@@ -236,7 +260,11 @@ class TestBootstrapMemberRequiredConsent:
     ):
         _seed_required_terms(db_session)
         identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
-        onboarding = OnboardingData(nickname="newnick", agree_terms=False, agree_privacy=True)
+        onboarding = OnboardingData(
+            nickname="newnick",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=False, agree_privacy=True)
 
         with pytest.raises(RequiredConsentNotAgreedError):
             _bootstrap(
@@ -255,7 +283,11 @@ class TestBootstrapMemberRequiredConsent:
     ):
         _seed_required_terms(db_session)
         identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
-        onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=False)
+        onboarding = OnboardingData(
+            nickname="newnick",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=False)
 
         with pytest.raises(RequiredConsentNotAgreedError):
             _bootstrap(
@@ -276,7 +308,11 @@ class TestBootstrapMemberNicknameValidation:
     ):
         _seed_required_terms(db_session)
         identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
-        onboarding = OnboardingData(nickname=None, agree_terms=True, agree_privacy=True)
+        onboarding = OnboardingData(
+            nickname=None,
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=True)
 
         with pytest.raises(InvalidNicknameError):
             _bootstrap(
@@ -294,7 +330,11 @@ class TestBootstrapMemberNicknameValidation:
     ):
         _seed_required_terms(db_session)
         identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
-        onboarding = OnboardingData(nickname="", agree_terms=True, agree_privacy=True)
+        onboarding = OnboardingData(
+            nickname="",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=True)
 
         with pytest.raises(InvalidNicknameError):
             _bootstrap(
@@ -312,7 +352,11 @@ class TestBootstrapMemberNicknameValidation:
     ):
         _seed_required_terms(db_session)
         identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
-        onboarding = OnboardingData(nickname="   ", agree_terms=True, agree_privacy=True)
+        onboarding = OnboardingData(
+            nickname="   ",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=True)
 
         with pytest.raises(InvalidNicknameError):
             _bootstrap(
@@ -334,7 +378,11 @@ class TestBootstrapMemberDuplicates:
         member_id = uuid.uuid4()
         _existing_member(db_session, member_id=member_id)
         identity = TrustedIdentity(user_id=member_id, email="new@example.com")
-        onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=True)
+        onboarding = OnboardingData(
+            nickname="newnick",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=True)
 
         with pytest.raises(MemberAlreadyExistsError):
             _bootstrap(
@@ -353,7 +401,11 @@ class TestBootstrapMemberDuplicates:
         _seed_required_terms(db_session)
         _existing_member(db_session, email="taken@example.com")
         identity = TrustedIdentity(user_id=uuid.uuid4(), email="taken@example.com")
-        onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=True)
+        onboarding = OnboardingData(
+            nickname="newnick",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=True)
 
         with pytest.raises(EmailAlreadyExistsError):
             _bootstrap(
@@ -372,7 +424,11 @@ class TestBootstrapMemberDuplicates:
         _seed_required_terms(db_session)
         _existing_member(db_session, email="user@test.com")
         identity = TrustedIdentity(user_id=uuid.uuid4(), email="  USER@Test.com  ")
-        onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=True)
+        onboarding = OnboardingData(
+            nickname="newnick",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=True)
 
         with pytest.raises(EmailAlreadyExistsError):
             _bootstrap(
@@ -394,7 +450,11 @@ class TestBootstrapMemberDuplicates:
         _seed_required_terms(db_session)
         _existing_member(db_session, nickname="taken-nick")
         identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
-        onboarding = OnboardingData(nickname="taken-nick", agree_terms=True, agree_privacy=True)
+        onboarding = OnboardingData(
+            nickname="taken-nick",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=True)
 
         member = _bootstrap(
             identity, onboarding, user_repository, terms_repository, member_agreement_repository
@@ -410,7 +470,10 @@ class TestBootstrapMemberDuplicates:
         _existing_member(db_session, nickname="taken-nick")
         identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
         onboarding = OnboardingData(
-            nickname="  taken-nick  ", agree_terms=True, agree_privacy=True
+            nickname="  taken-nick  ",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=True
         )
 
         member = _bootstrap(
@@ -431,7 +494,10 @@ class TestBootstrapMemberAgreementCreation:
         member_id = uuid.uuid4()
         identity = TrustedIdentity(user_id=member_id, email="new@example.com")
         onboarding = OnboardingData(
-            nickname="newnick", agree_terms=True, agree_privacy=True, agree_ai_analysis=False
+            nickname="newnick",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=True, agree_ai_analysis=False
         )
 
         _bootstrap(
@@ -452,7 +518,10 @@ class TestBootstrapMemberAgreementCreation:
         member_id = uuid.uuid4()
         identity = TrustedIdentity(user_id=member_id, email="new@example.com")
         onboarding = OnboardingData(
-            nickname="newnick", agree_terms=True, agree_privacy=True, agree_ai_analysis=True
+            nickname="newnick",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=True, agree_ai_analysis=True
         )
 
         _bootstrap(
@@ -473,7 +542,10 @@ class TestBootstrapMemberAgreementCreation:
         member_id = uuid.uuid4()
         identity = TrustedIdentity(user_id=member_id, email="new@example.com")
         onboarding = OnboardingData(
-            nickname="newnick", agree_terms=True, agree_privacy=True, agree_ai_analysis=False
+            nickname="newnick",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=True, agree_ai_analysis=False
         )
 
         _bootstrap(
@@ -491,7 +563,11 @@ class TestBootstrapMemberAgreementCreation:
         # TERMS_OF_SERVICE를 세팅하지 않고 PRIVACY만 세팅한다.
         _seed_terms(db_session, "PRIVACY")
         identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
-        onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=True)
+        onboarding = OnboardingData(
+            nickname="newnick",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=True)
 
         with pytest.raises(RequiredTermsNotConfiguredError):
             _bootstrap(
@@ -510,7 +586,11 @@ class TestBootstrapMemberAgreementCreation:
     ):
         _seed_terms(db_session, "TERMS_OF_SERVICE")
         identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
-        onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=True)
+        onboarding = OnboardingData(
+            nickname="newnick",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=True)
 
         with pytest.raises(RequiredTermsNotConfiguredError):
             _bootstrap(
@@ -531,7 +611,10 @@ class TestBootstrapMemberAgreementCreation:
         _seed_required_terms(db_session)
         identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
         onboarding = OnboardingData(
-            nickname="newnick", agree_terms=True, agree_privacy=True, agree_ai_analysis=True
+            nickname="newnick",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=True, agree_ai_analysis=True
         )
 
         with pytest.raises(RequiredTermsNotConfiguredError):
@@ -558,7 +641,11 @@ class TestBootstrapMemberAgreementCreation:
         )
         _seed_terms(db_session, "PRIVACY")
         identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
-        onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=True)
+        onboarding = OnboardingData(
+            nickname="newnick",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=True)
 
         with pytest.raises(RequiredTermsNotConfiguredError):
             _bootstrap(
@@ -582,7 +669,11 @@ class TestBootstrapMemberAgreementCreation:
         )
         _seed_terms(db_session, "PRIVACY")
         identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
-        onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=True)
+        onboarding = OnboardingData(
+            nickname="newnick",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=True)
 
         with pytest.raises(RequiredTermsNotConfiguredError):
             _bootstrap(
@@ -606,7 +697,11 @@ class TestBootstrapMemberAgreementCreation:
         )
         _seed_terms(db_session, "PRIVACY")
         identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
-        onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=True)
+        onboarding = OnboardingData(
+            nickname="newnick",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=True)
 
         with pytest.raises(RequiredTermsNotConfiguredError):
             _bootstrap(
@@ -625,7 +720,11 @@ class TestBootstrapMemberAgreementCreation:
         """agreement 저장 중 예외가 발생하면 member까지 rollback되는지 검증한다."""
         _seed_required_terms(db_session)
         identity = TrustedIdentity(user_id=uuid.uuid4(), email="new@example.com")
-        onboarding = OnboardingData(nickname="newnick", agree_terms=True, agree_privacy=True)
+        onboarding = OnboardingData(
+            nickname="newnick",
+            birth_date=date(2000, 1, 1),
+            gender=Gender.MALE,
+            agree_terms=True, agree_privacy=True)
 
         def _boom(*args, **kwargs):
             raise RuntimeError("simulated failure while saving agreement")

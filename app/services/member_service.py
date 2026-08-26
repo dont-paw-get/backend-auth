@@ -10,11 +10,12 @@ endpoint만 추가하면 된다.
 
 import uuid
 from dataclasses import dataclass, field
+from datetime import date
 
 from sqlalchemy.exc import IntegrityError
 
 from app.models.member_agreement import MemberAgreementAction
-from app.models.user import MemberStatus, User
+from app.models.user import Gender, MemberStatus, User
 from app.repositories.member_agreement_repository import MemberAgreementRepository
 from app.repositories.terms_repository import TermsRepository
 from app.repositories.user_repository import UserRepository
@@ -46,9 +47,17 @@ class TrustedIdentity:
 
 @dataclass(frozen=True)
 class OnboardingData:
-    """MEMBER 최초 생성 시 사용자가 입력하는 온보딩 데이터."""
+    """
+    MEMBER 최초 생성 시 사용자가 입력하는 온보딩 데이터.
+
+    CLIAR-120: birth_date/gender는 신규 bootstrap에서 필수이므로
+    Optional이 아니다(app/schemas/user.py의 MemberBootstrapRequest가
+    이미 필수로 검증하므로, 여기서는 그 결과를 그대로 전달받는다).
+    """
 
     nickname: str | None
+    birth_date: date
+    gender: Gender
     agree_terms: bool
     agree_privacy: bool
     agree_ai_analysis: bool = False
@@ -200,6 +209,8 @@ def bootstrap_member(
             member_id=identity.user_id,
             email=normalized_email,
             nickname=normalized_nickname,
+            birth_date=onboarding.birth_date,
+            gender=onboarding.gender,
             status=MemberStatus.ACTIVE,
         )
         user_repository.create(member)

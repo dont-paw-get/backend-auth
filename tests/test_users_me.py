@@ -151,3 +151,42 @@ class TestGetUsersMe:
         response = client.get(ENDPOINT)
 
         assert response.status_code == 401
+
+
+class TestGetUsersMeBirthDateAndGender:
+    """CLIAR-120: GET /users/me 응답에 birth_date/gender 포함."""
+
+    def test_returns_birth_date_and_gender(self, client, db_session):
+        from datetime import date
+
+        from app.models.user import Gender
+
+        member_id = uuid.uuid4()
+        member = _create_member(db_session, member_id)
+        member.birth_date = date(2002, 5, 17)
+        member.gender = Gender.MALE
+        db_session.commit()
+        app.dependency_overrides[get_current_user_id] = lambda: str(member_id)
+
+        response = client.get(ENDPOINT)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["birth_date"] == "2002-05-17"
+        assert body["gender"] == "MALE"
+
+    def test_existing_member_with_null_birth_date_and_gender_returns_200(
+        self, client, db_session
+    ):
+        """기존(마이그레이션 이전) member는 birth_date/gender가 NULL일 수
+        있으며, GET 조회 시 500이 아니라 200과 null 값으로 응답해야 한다."""
+        member_id = uuid.uuid4()
+        _create_member(db_session, member_id)  # birth_date/gender 지정 안 함 -> NULL
+        app.dependency_overrides[get_current_user_id] = lambda: str(member_id)
+
+        response = client.get(ENDPOINT)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["birth_date"] is None
+        assert body["gender"] is None
