@@ -1,8 +1,8 @@
 import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import DateTime, Enum, Identity, String, Text, Uuid, func
+from sqlalchemy import Date, DateTime, Enum, Identity, String, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -13,6 +13,19 @@ class MemberStatus(str, enum.Enum):
 
     ACTIVE = "ACTIVE"
     WITHDRAWN = "WITHDRAWN"
+
+
+class Gender(str, enum.Enum):
+    """
+    member.gender 컬럼에 대응하는 PostgreSQL ENUM(member_gender).
+
+    CLIAR-120: 현재 요구사항은 MALE/FEMALE만 지원한다. OTHER/UNKNOWN
+    등 다른 값은 임의로 추가하지 않는다(MemberStatus와 동일한 native
+    enum 전략을 따른다).
+    """
+
+    MALE = "MALE"
+    FEMALE = "FEMALE"
 
 
 class User(Base):
@@ -41,6 +54,15 @@ class User(Base):
     nickname: Mapped[str] = mapped_column(String(255), nullable=False)
 
     profile_image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # CLIAR-120: 기존 member row와의 호환을 위해 DB 레벨에서는 nullable을
+    # 허용한다(신규 bootstrap에서의 필수 여부는 API schema 레벨에서만
+    # 강제한다. app/schemas/user.py의 MemberBootstrapRequest 참고).
+    birth_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    gender: Mapped[Gender | None] = mapped_column(
+        Enum(Gender, name="member_gender", native_enum=True), nullable=True
+    )
 
     status: Mapped[MemberStatus] = mapped_column(
         Enum(MemberStatus, name="member_status", native_enum=True), nullable=False

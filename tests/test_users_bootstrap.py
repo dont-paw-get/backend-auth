@@ -143,6 +143,8 @@ class TestBootstrapMember:
             headers=headers,
             json={
                 "nickname": "haechan",
+                "birth_date": "2000-01-01",
+                "gender": "MALE",
                 "agree_terms": True,
                 "agree_privacy": True,
                 "agree_ai_analysis": False,
@@ -167,6 +169,8 @@ class TestBootstrapMember:
             headers=headers,
             json={
                 "nickname": "haechan",
+                "birth_date": "2000-01-01",
+                "gender": "MALE",
                 "agree_terms": True,
                 "agree_privacy": True,
             },
@@ -187,7 +191,7 @@ class TestBootstrapMember:
         response = client.post(
             ENDPOINT,
             headers=headers,
-            json={"nickname": "haechan", "agree_terms": True, "agree_privacy": True},
+            json={"nickname": "haechan", "birth_date": "2000-01-01", "gender": "MALE", "agree_terms": True, "agree_privacy": True},
         )
 
         assert response.status_code == 201
@@ -203,7 +207,7 @@ class TestBootstrapMember:
         response = client.post(
             ENDPOINT,
             headers=headers,
-            json={"nickname": "haechan", "agree_terms": True, "agree_privacy": True},
+            json={"nickname": "haechan", "birth_date": "2000-01-01", "gender": "MALE", "agree_terms": True, "agree_privacy": True},
         )
 
         assert response.status_code == 201
@@ -223,7 +227,7 @@ class TestBootstrapAuthorization:
 
         response = client.post(
             ENDPOINT,
-            json={"nickname": "haechan", "agree_terms": True, "agree_privacy": True},
+            json={"nickname": "haechan", "birth_date": "2000-01-01", "gender": "MALE", "agree_terms": True, "agree_privacy": True},
         )
 
         assert response.status_code == 401
@@ -245,7 +249,7 @@ class TestBootstrapAuthorization:
         response = client.post(
             ENDPOINT,
             headers=headers,
-            json={"nickname": "haechan", "agree_terms": True, "agree_privacy": True},
+            json={"nickname": "haechan", "birth_date": "2000-01-01", "gender": "MALE", "agree_terms": True, "agree_privacy": True},
         )
 
         assert response.status_code == 401
@@ -257,7 +261,7 @@ class TestBootstrapAuthorization:
         response = client.post(
             ENDPOINT,
             headers={"Authorization": "NotBearer sometoken"},
-            json={"nickname": "haechan", "agree_terms": True, "agree_privacy": True},
+            json={"nickname": "haechan", "birth_date": "2000-01-01", "gender": "MALE", "agree_terms": True, "agree_privacy": True},
         )
 
         assert response.status_code == 401
@@ -271,7 +275,7 @@ class TestBootstrapAuthorization:
         response = client.post(
             ENDPOINT,
             headers={"Authorization": "Bearer forged-token"},
-            json={"nickname": "haechan", "agree_terms": True, "agree_privacy": True},
+            json={"nickname": "haechan", "birth_date": "2000-01-01", "gender": "MALE", "agree_terms": True, "agree_privacy": True},
         )
 
         assert response.status_code == 401
@@ -289,7 +293,7 @@ class TestBootstrapAuthorization:
         response = client.post(
             ENDPOINT,
             headers={"Authorization": "Bearer id-token"},
-            json={"nickname": "haechan", "agree_terms": True, "agree_privacy": True},
+            json={"nickname": "haechan", "birth_date": "2000-01-01", "gender": "MALE", "agree_terms": True, "agree_privacy": True},
         )
 
         assert response.status_code == 401
@@ -303,7 +307,7 @@ class TestBootstrapAuthorization:
         response = client.post(
             ENDPOINT,
             headers={"Authorization": "Bearer expired-token"},
-            json={"nickname": "haechan", "agree_terms": True, "agree_privacy": True},
+            json={"nickname": "haechan", "birth_date": "2000-01-01", "gender": "MALE", "agree_terms": True, "agree_privacy": True},
         )
 
         assert response.status_code == 401
@@ -317,7 +321,7 @@ class TestBootstrapAuthorization:
         response = client.post(
             ENDPOINT,
             headers={"Authorization": "Bearer wrong-issuer-token"},
-            json={"nickname": "haechan", "agree_terms": True, "agree_privacy": True},
+            json={"nickname": "haechan", "birth_date": "2000-01-01", "gender": "MALE", "agree_terms": True, "agree_privacy": True},
         )
 
         assert response.status_code == 401
@@ -331,7 +335,7 @@ class TestBootstrapAuthorization:
         response = client.post(
             ENDPOINT,
             headers={"Authorization": "Bearer wrong-client-token"},
-            json={"nickname": "haechan", "agree_terms": True, "agree_privacy": True},
+            json={"nickname": "haechan", "birth_date": "2000-01-01", "gender": "MALE", "agree_terms": True, "agree_privacy": True},
         )
 
         assert response.status_code == 401
@@ -357,7 +361,7 @@ class TestBootstrapAuthorization:
         response = client.post(
             ENDPOINT,
             headers={"Authorization": "Bearer some-token"},
-            json={"nickname": "haechan", "agree_terms": True, "agree_privacy": True},
+            json={"nickname": "haechan", "birth_date": "2000-01-01", "gender": "MALE", "agree_terms": True, "agree_privacy": True},
         )
 
         assert response.status_code == 401
@@ -382,7 +386,7 @@ class TestBootstrapAuthorization:
         response = client.post(
             ENDPOINT,
             headers={"Authorization": "Bearer some-token"},
-            json={"nickname": "haechan", "agree_terms": True, "agree_privacy": True},
+            json={"nickname": "haechan", "birth_date": "2000-01-01", "gender": "MALE", "agree_terms": True, "agree_privacy": True},
         )
 
         assert response.status_code >= 500
@@ -404,6 +408,8 @@ class TestBootstrapRequestBodyIdentityRemoved:
             json={
                 "user_id": str(uuid.uuid4()),
                 "nickname": "haechan",
+                "birth_date": "2000-01-01",
+                "gender": "MALE",
                 "agree_terms": True,
                 "agree_privacy": True,
             },
@@ -427,6 +433,8 @@ class TestBootstrapRequestBodyIdentityRemoved:
             json={
                 "email": "attacker-supplied@example.com",
                 "nickname": "haechan",
+                "birth_date": "2000-01-01",
+                "gender": "MALE",
                 "agree_terms": True,
                 "agree_privacy": True,
             },
@@ -452,6 +460,8 @@ class TestBootstrapValidation:
             headers=headers,
             json={
                 "nickname": "newnick",
+                "birth_date": "2000-01-01",
+                "gender": "MALE",
                 "agree_terms": True,
                 "agree_privacy": True,
             },
@@ -474,6 +484,8 @@ class TestBootstrapValidation:
             headers=headers,
             json={
                 "nickname": "newnick",
+                "birth_date": "2000-01-01",
+                "gender": "MALE",
                 "agree_terms": True,
                 "agree_privacy": True,
             },
@@ -500,6 +512,8 @@ class TestBootstrapValidation:
             headers=headers,
             json={
                 "nickname": "same-nick",
+                "birth_date": "2000-01-01",
+                "gender": "MALE",
                 "agree_terms": True,
                 "agree_privacy": True,
             },
@@ -516,6 +530,8 @@ class TestBootstrapValidation:
             headers=headers,
             json={
                 "nickname": "newnick",
+                "birth_date": "2000-01-01",
+                "gender": "MALE",
                 "agree_terms": False,
                 "agree_privacy": True,
             },
@@ -531,6 +547,8 @@ class TestBootstrapValidation:
             headers=headers,
             json={
                 "nickname": "   ",
+                "birth_date": "2000-01-01",
+                "gender": "MALE",
                 "agree_terms": True,
                 "agree_privacy": True,
             },
@@ -554,6 +572,8 @@ class TestBootstrapMemberAgreement:
             headers=headers,
             json={
                 "nickname": "haechan",
+                "birth_date": "2000-01-01",
+                "gender": "MALE",
                 "agree_terms": True,
                 "agree_privacy": True,
             },
@@ -588,6 +608,8 @@ class TestBootstrapMemberAgreement:
             headers=headers,
             json={
                 "nickname": "haechan",
+                "birth_date": "2000-01-01",
+                "gender": "MALE",
                 "agree_terms": True,
                 "agree_privacy": True,
                 "agree_ai_analysis": True,
@@ -621,6 +643,8 @@ class TestBootstrapMemberAgreement:
             headers=headers,
             json={
                 "nickname": "haechan",
+                "birth_date": "2000-01-01",
+                "gender": "MALE",
                 "agree_terms": True,
                 "agree_privacy": True,
                 "agree_ai_analysis": False,
@@ -654,6 +678,8 @@ class TestBootstrapMemberAgreement:
             headers=headers,
             json={
                 "nickname": "newnick",
+                "birth_date": "2000-01-01",
+                "gender": "MALE",
                 "agree_terms": True,
                 "agree_privacy": True,
             },
@@ -673,6 +699,8 @@ class TestBootstrapMemberAgreement:
             headers=headers,
             json={
                 "nickname": "newnick",
+                "birth_date": "2000-01-01",
+                "gender": "MALE",
                 "agree_terms": True,
                 "agree_privacy": True,
                 "agree_ai_analysis": True,
@@ -682,3 +710,187 @@ class TestBootstrapMemberAgreement:
         assert response.status_code == 503
         assert db_session.query(User).count() == 0
         assert db_session.query(MemberAgreement).count() == 0
+
+
+class TestBootstrapBirthDateAndGender:
+    """CLIAR-120: 신규 회원 bootstrap 시 birth_date/gender 필수 입력 검증."""
+
+    def test_valid_birth_date_and_gender_creates_member(
+        self, client, db_session, monkeypatch
+    ):
+        _seed_required_terms(db_session)
+        member_id = str(uuid.uuid4())
+        headers = _authenticate_as(monkeypatch, sub=member_id, email="test@example.com")
+
+        response = client.post(
+            ENDPOINT,
+            headers=headers,
+            json={
+                "nickname": "haechan",
+                "birth_date": "2002-05-17",
+                "gender": "MALE",
+                "agree_terms": True,
+                "agree_privacy": True,
+            },
+        )
+
+        assert response.status_code == 201
+
+    def test_birth_date_is_saved_in_database(self, client, db_session, monkeypatch):
+        member_id = str(uuid.uuid4())
+        _seed_required_terms(db_session)
+        headers = _authenticate_as(monkeypatch, sub=member_id, email="test@example.com")
+
+        client.post(
+            ENDPOINT,
+            headers=headers,
+            json={
+                "nickname": "haechan",
+                "birth_date": "2002-05-17",
+                "gender": "MALE",
+                "agree_terms": True,
+                "agree_privacy": True,
+            },
+        )
+
+        member = db_session.query(User).filter(User.member_id == uuid.UUID(member_id)).one()
+        assert member.birth_date.isoformat() == "2002-05-17"
+
+    def test_gender_is_saved_in_database(self, client, db_session, monkeypatch):
+        member_id = str(uuid.uuid4())
+        _seed_required_terms(db_session)
+        headers = _authenticate_as(monkeypatch, sub=member_id, email="test@example.com")
+
+        client.post(
+            ENDPOINT,
+            headers=headers,
+            json={
+                "nickname": "haechan",
+                "birth_date": "2002-05-17",
+                "gender": "FEMALE",
+                "agree_terms": True,
+                "agree_privacy": True,
+            },
+        )
+
+        member = db_session.query(User).filter(User.member_id == uuid.UUID(member_id)).one()
+        assert member.gender.value == "FEMALE"
+
+    def test_missing_birth_date_returns_422(self, client, db_session, monkeypatch):
+        headers = _authenticate_as(monkeypatch, sub=str(uuid.uuid4()))
+
+        response = client.post(
+            ENDPOINT,
+            headers=headers,
+            json={
+                "nickname": "haechan",
+                "gender": "MALE",
+                "agree_terms": True,
+                "agree_privacy": True,
+            },
+        )
+
+        assert response.status_code == 422
+
+    def test_missing_gender_returns_422(self, client, db_session, monkeypatch):
+        headers = _authenticate_as(monkeypatch, sub=str(uuid.uuid4()))
+
+        response = client.post(
+            ENDPOINT,
+            headers=headers,
+            json={
+                "nickname": "haechan",
+                "birth_date": "2002-05-17",
+                "agree_terms": True,
+                "agree_privacy": True,
+            },
+        )
+
+        assert response.status_code == 422
+
+    def test_invalid_birth_date_returns_422(self, client, db_session, monkeypatch):
+        """2002-13-40처럼 존재하지 않는 날짜는 Pydantic date 타입에 의해
+        자동으로 거절되어야 한다."""
+        headers = _authenticate_as(monkeypatch, sub=str(uuid.uuid4()))
+
+        response = client.post(
+            ENDPOINT,
+            headers=headers,
+            json={
+                "nickname": "haechan",
+                "birth_date": "2002-13-40",
+                "gender": "MALE",
+                "agree_terms": True,
+                "agree_privacy": True,
+            },
+        )
+
+        assert response.status_code == 422
+
+    def test_slash_formatted_birth_date_returns_422(self, client, db_session, monkeypatch):
+        """"2002/05/17" 같은 슬래시 형식은 DB에 그대로 저장하지 않고
+        422로 거절해야 한다(API 계약은 YYYY-MM-DD)."""
+        headers = _authenticate_as(monkeypatch, sub=str(uuid.uuid4()))
+
+        response = client.post(
+            ENDPOINT,
+            headers=headers,
+            json={
+                "nickname": "haechan",
+                "birth_date": "2002/05/17",
+                "gender": "MALE",
+                "agree_terms": True,
+                "agree_privacy": True,
+            },
+        )
+
+        assert response.status_code == 422
+
+    def test_invalid_gender_value_returns_422(self, client, db_session, monkeypatch):
+        """MALE/FEMALE 외의 값(OTHER, UNKNOWN, M, F, 남, 여 등)은 모두
+        거절되어야 한다."""
+        headers = _authenticate_as(monkeypatch, sub=str(uuid.uuid4()))
+
+        response = client.post(
+            ENDPOINT,
+            headers=headers,
+            json={
+                "nickname": "haechan",
+                "birth_date": "2002-05-17",
+                "gender": "OTHER",
+                "agree_terms": True,
+                "agree_privacy": True,
+            },
+        )
+
+        assert response.status_code == 422
+
+    def test_existing_bootstrap_agreement_logic_still_works_with_new_fields(
+        self, client, db_session, monkeypatch
+    ):
+        """birth_date/gender 추가 후에도 기존 필수 약관 동의 이력 저장
+        로직(CLIAR-92)이 그대로 동작해야 한다."""
+        _seed_required_terms(db_session)
+        member_id = str(uuid.uuid4())
+        headers = _authenticate_as(monkeypatch, sub=member_id, email="test@example.com")
+
+        response = client.post(
+            ENDPOINT,
+            headers=headers,
+            json={
+                "nickname": "haechan",
+                "birth_date": "2002-05-17",
+                "gender": "MALE",
+                "agree_terms": True,
+                "agree_privacy": True,
+            },
+        )
+
+        assert response.status_code == 201
+        member = db_session.query(User).filter(User.member_id == uuid.UUID(member_id)).one()
+        agreements = (
+            db_session.query(MemberAgreement)
+            .filter(MemberAgreement.member_id == member.member_id)
+            .all()
+        )
+        assert len(agreements) == 2

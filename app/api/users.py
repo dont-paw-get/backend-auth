@@ -150,6 +150,8 @@ def bootstrap_current_member(
 
     onboarding = OnboardingData(
         nickname=payload.nickname,
+        birth_date=payload.birth_date,
+        gender=payload.gender,
         agree_terms=payload.agree_terms,
         agree_privacy=payload.agree_privacy,
         agree_ai_analysis=payload.agree_ai_analysis,
