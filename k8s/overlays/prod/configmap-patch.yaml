@@ -1,12 +1,10 @@
-# ⚠️ prod 배포는 아직 사용하지 않습니다. dev 배포가 안정화되면 아래 주석을 해제하세요.
-#
-# # 상용 환경에서 base ConfigMap 위에 덮어쓸 값
-# apiVersion: v1
-# kind: ConfigMap
-# metadata:
-#   name: backend-auth-config
-# data:
-#   APP_ENV: "production"
-#   # 상용용 Cognito User Pool / Client 로 채워주세요.
-#   COGNITO_USER_POOL_ID: "ap-northeast-2_PRODxxxxx"
-#   COGNITO_CLIENT_ID: "prod-client-id-xxxxxxxx"
+# 상용 환경에서 base ConfigMap 위에 덮어쓸 값
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-auth-config
+data:
+  APP_ENV: "production"
+  # TODO: 상용용 Cognito User Pool / Client 실제 값으로 교체하세요. (아래는 placeholder)
+  COGNITO_USER_POOL_ID: "ap-northeast-2_PRODxxxxx"
+  COGNITO_CLIENT_ID: "prod-client-id-xxxxxxxx"

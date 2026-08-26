@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - develop         # develop → dev 환경
-      # - main          # main → prod 환경 (prod 배포 사용 시 주석 해제)
+      - main            # main → prod 환경
     paths-ignore:
       - "k8s/**"         # 태그 갱신 커밋이 무한루프 도는 것 방지
       - "argocd/**"
@@ -17,9 +17,6 @@ permissions:
 
 env:
   AWS_REGION: ap-northeast-2
-  # ⚠️ 실제 만든 ECR 리포지토리 이름과 반드시 일치해야 함.
-  #    `aws ecr describe-repositories`로 확인한 이름으로 맞추세요.
-  ECR_REPOSITORY: dpyb-dev/dpyb-auth
 
 jobs:
   build-push:
@@ -39,22 +36,48 @@ jobs:
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      # 브랜치별로 대상 ECR 리포/overlay/환경명을 결정합니다.
+      #   develop → dev  (dpyb-dev/dpyb-auth,  MUTABLE  → main-latest 등 movable 태그 OK)
+      #   main    → prod (dpyb-prod/dpyb-auth, IMMUTABLE → 커밋 SHA 태그만 push)
+      - name: Resolve target by branch
+        id: target
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            echo "env=prod"                                >> "$GITHUB_OUTPUT"
+            echo "ecr_repository=dpyb-prod/dpyb-auth"      >> "$GITHUB_OUTPUT"
+            echo "overlay=k8s/overlays/prod/kustomization.yaml" >> "$GITHUB_OUTPUT"
+            echo "immutable=true"                          >> "$GITHUB_OUTPUT"
+          else
+            echo "env=dev"                                 >> "$GITHUB_OUTPUT"
+            echo "ecr_repository=dpyb-dev/dpyb-auth"       >> "$GITHUB_OUTPUT"
+            echo "overlay=k8s/overlays/dev/kustomization.yaml"  >> "$GITHUB_OUTPUT"
+            echo "immutable=false"                         >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build & push image
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ steps.target.outputs.ecr_repository }}
+          IMMUTABLE: ${{ steps.target.outputs.immutable }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker build \
-            -t "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
-            -t "$REGISTRY/$ECR_REPOSITORY:${{ github.ref_name }}-latest" .
+          # 커밋 SHA 태그는 항상 빌드 (immutable/mutable 공통, 실제 배포에 쓰는 태그)
+          docker build -t "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" .
           docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-          docker push "$REGISTRY/$ECR_REPOSITORY:${{ github.ref_name }}-latest"
+          # movable 태그(<branch>-latest)는 MUTABLE 리포(dev)에서만 사용.
+          # IMMUTABLE 리포(prod)는 같은 태그 재push 가 실패하므로 건너뜀.
+          if [ "$IMMUTABLE" != "true" ]; then
+            MOVABLE="$REGISTRY/$ECR_REPOSITORY:${{ github.ref_name }}-latest"
+            docker tag "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" "$MOVABLE"
+            docker push "$MOVABLE"
+          fi
 
-      - name: Bump dev overlay image tag (GitOps)
+      - name: Bump overlay image tag (GitOps)
         env:
           IMAGE_TAG: ${{ github.sha }}
+          KFILE: ${{ steps.target.outputs.overlay }}
+          ENV_NAME: ${{ steps.target.outputs.env }}
         run: |
-          KFILE="k8s/overlays/dev/kustomization.yaml"
           # kustomization.yaml 의 newTag 값을 커밋 SHA 로 치환
           sed -i -E "s/^(\s*newTag:).*/\1 ${IMAGE_TAG}/" "$KFILE"
           git config user.name "github-actions[bot]"
@@ -63,6 +86,6 @@ jobs:
             echo "이미지 태그 변경 없음"
           else
             git add "$KFILE"
-            git commit -m "chore(deploy): bump dev image tag to ${IMAGE_TAG}"
+            git commit -m "chore(deploy): bump ${ENV_NAME} image tag to ${IMAGE_TAG}"
             git push origin "HEAD:${{ github.ref_name }}"
           fi

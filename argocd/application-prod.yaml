@@ -1,25 +1,30 @@
-# ⚠️ prod 배포는 아직 사용하지 않습니다.
-# (main 브랜치 → dpyb-auth 네임스페이스)
+# 상용 (main 브랜치 → dpyb-prod 클러스터 / dpyb-auth 네임스페이스)
 #
-# apiVersion: argoproj.io/v1alpha1
-# kind: Application
-# metadata:
-#   name: backend-auth-prod
-#   namespace: argocd
-#   finalizers:
-#     - resources-finalizer.argocd.argoproj.io
-# spec:
-#   project: default
-#   source:
-#     repoURL: https://github.com/dont-paw-get/backend-auth.git
-#     targetRevision: main             # 상용 브랜치를 추적
-#     path: k8s/overlays/prod          # prod overlay 적용
-#   destination:
-#     server: https://kubernetes.default.svc
-#     namespace: dpyb-auth
-#   syncPolicy:
-#     automated:
-#       prune: true
-#       selfHeal: true
-#     syncOptions:
-#       - CreateNamespace=true
+# ⚠️ 중앙 ArgoCD 구조: 이 Application 은 ArgoCD 가 떠 있는 클러스터가 아니라
+#    원격 dpyb-prod 클러스터로 배포합니다. destination.name 은 반드시
+#    `argocd cluster add ... --name dpyb-prod` 로 등록해 둔 이름이어야 합니다.
+#    아직 등록 안 했다면 등록 먼저! (미등록 시 "cluster not found" 로 sync 실패)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: backend-auth-prod
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/dont-paw-get/backend-auth.git
+    targetRevision: main             # 상용 브랜치를 추적
+    path: k8s/overlays/prod          # prod overlay 적용
+  destination:
+    # dpyb-prod 원격 클러스터. `argocd cluster list` 로 등록 이름 확인.
+    # 이름 대신 URL 로 쓰려면: server: https://<dpyb-prod-eks-endpoint>
+    name: dpyb-prod
+    namespace: dpyb-auth
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

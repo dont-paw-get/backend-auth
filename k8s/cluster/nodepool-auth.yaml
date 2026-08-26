@@ -1,0 +1,45 @@
+# EKS Auto Mode 전용 NodePool: auth 서비스 전용 노드
+#   ⚠️ prod 클러스터(dpyb-prod)에만 적용하세요. (dev 클러스터 dpyb-dev 는 노드 분리 안 함)
+#   kubectl apply -f k8s/cluster/nodepool-auth.yaml   # dpyb-prod 컨텍스트에서 1회
+#
+# 상용(prod) 배포는 nodepin-patch.yaml 로 아래 label/taint 를 요구하고,
+# Karpenter 가 이 NodePool 로 매칭 노드를 필요할 때 자동 프로비저닝합니다.
+#   - label : workload=auth          (Deployment 의 nodeSelector 와 일치)
+#   - taint : dedicated=auth:NoSchedule (toleration 없는 다른 서비스 파드 차단)
+#
+# 주의) Auto Mode 는 karpenter.sh/v1 NodePool + eks.amazonaws.com 그룹의
+#       NodeClass(내장 default)를 사용합니다. 오픈소스 Karpenter 의
+#       EC2NodeClass 예제와 다르니 복붙 시 주의하세요.
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: auth
+spec:
+  template:
+    metadata:
+      labels:
+        workload: auth
+    spec:
+      taints:
+        - key: dedicated
+          value: auth
+          effect: NoSchedule
+      nodeClassRef:
+        group: eks.amazonaws.com
+        kind: NodeClass
+        name: default
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+        - key: eks.amazonaws.com/instance-category
+          operator: In
+          values: ["t", "m"]
+  # 이 NodePool 이 띄울 수 있는 총량 상한 (폭주/비용 방지). 필요에 맞게 조정.
+  limits:
+    cpu: "10"
+  # 유휴 노드는 비워지면 정리해 비용 절감 (Auto Mode 권장 기본값)
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 30s
