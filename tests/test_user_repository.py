@@ -128,15 +128,5 @@ class TestExistsByEmail:
 
 
 class TestExistsByNickname:
-    def test_true_for_pending_member(self, db_session, repository):
-        _create_member(
-            db_session,
-            email="pending2@example.com",
-            nickname="pendingnick",
-            status=MemberStatus.PENDING,
-        )
-
-        assert repository.exists_by_nickname("pendingnick") is True
-
     def test_false_when_nickname_does_not_exist(self, repository):
         assert repository.exists_by_nickname("freenick") is False

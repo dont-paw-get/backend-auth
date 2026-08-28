@@ -51,12 +51,7 @@ class UserRepository:
         return self.db.execute(stmt).first() is not None
 
     def exists_by_nickname(self, nickname: str) -> bool:
-        """
-        주어진 닉네임이 이미 존재하는지 확인한다.
-
-        exists_by_email과 마찬가지로 status로 필터링하지 않으며,
-        PENDING 회원이 사용 중인 닉네임도 "사용 중"으로 계산한다.
-        """
+        """주어진 닉네임이 이미 존재하는지 확인한다."""
         stmt = select(User.member_id).where(User.nickname == nickname).limit(1)
         return self.db.execute(stmt).first() is not None
 
