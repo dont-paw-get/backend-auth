@@ -227,3 +227,79 @@ class AvailabilityRequest(BaseModel):
 class AvailabilityResponse(BaseModel):
     field: AvailabilityField
     available: bool
+
+
+class PasswordForgotRequest(BaseModel):
+    """
+    POST /api/v1/auth/password/forgot 요청 schema (CLIAR-157,
+    PLAN.md §4.4).
+
+    가입 여부와 무관하게 항상 204를 반환해야 하므로(사용자 열거
+    방지), 이 schema 자체는 password 계열 필드를 갖지 않는다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: str
+
+    @field_validator("email")
+    @classmethod
+    def email_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("email must not be empty or blank")
+        return value
+
+
+class PasswordResetRequest(BaseModel):
+    """
+    POST /api/v1/auth/password/reset 요청 schema (CLIAR-157,
+    PLAN.md §4.4).
+
+    new_password는 SecretStr로 선언해 repr()/로그/예외 메시지에
+    평문이 노출되지 않게 한다(LoginRequest/SignupRequest와 동일한
+    정책).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: str
+    code: str
+    new_password: SecretStr
+
+    @field_validator("email", "code")
+    @classmethod
+    def must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be empty or blank")
+        return value
+
+    @field_validator("new_password")
+    @classmethod
+    def new_password_must_not_be_blank(cls, value: SecretStr) -> SecretStr:
+        if not value.get_secret_value().strip():
+            raise ValueError("new_password must not be empty or blank")
+        return value
+
+
+class PasswordChangeRequest(BaseModel):
+    """
+    POST /api/v1/auth/password/change 요청 schema (CLIAR-157,
+    PLAN.md §4.4).
+
+    member_id/sub/email 등 인증 대상을 가리키는 필드는 이 schema에
+    두지 않는다 — 인증 대상은 항상 Bearer Access Token에서만
+    얻는다(app/core/security.py의 get_current_access_token).
+    current_password/new_password 모두 SecretStr로 선언한다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    current_password: SecretStr
+    new_password: SecretStr
+
+    @field_validator("current_password", "new_password")
+    @classmethod
+    def passwords_must_not_be_blank(cls, value: SecretStr) -> SecretStr:
+        if not value.get_secret_value().strip():
+            raise ValueError("password must not be empty or blank")
+        return value
