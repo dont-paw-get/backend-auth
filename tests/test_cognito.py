@@ -375,3 +375,159 @@ class TestDeleteCognitoUser:
 
         with pytest.raises(RuntimeError):
             cognito.delete_cognito_user("some-access-token", sub="cognito-sub-0001")
+
+
+class TestRefreshCognitoAccessToken:
+    """
+    CLIAR-125: Cognito Refresh Token으로 새 Access Token을 발급받는
+    refresh_cognito_access_token() 테스트.
+
+    boto3 client 자체를 monkeypatch하여 실제 AWS/Cognito에 접속하지
+    않는다.
+    """
+
+    def _patch_client(self, monkeypatch, fake_client):
+        monkeypatch.setattr(cognito, "get_cognito_idp_client", lambda: fake_client)
+
+    def test_calls_initiate_auth_with_refresh_token_auth_flow(self, monkeypatch):
+        received = {}
+
+        class _FakeClient:
+            def initiate_auth(self, AuthFlow, AuthParameters, ClientId):
+                received["AuthFlow"] = AuthFlow
+                received["AuthParameters"] = AuthParameters
+                received["ClientId"] = ClientId
+                return {
+                    "AuthenticationResult": {
+                        "AccessToken": "new-access-token",
+                        "ExpiresIn": 86400,
+                    }
+                }
+
+        self._patch_client(monkeypatch, _FakeClient())
+
+        cognito.refresh_cognito_access_token("some-refresh-token")
+
+        assert received["AuthFlow"] == "REFRESH_TOKEN_AUTH"
+
+    def test_passes_refresh_token_in_auth_parameters(self, monkeypatch):
+        received = {}
+
+        class _FakeClient:
+            def initiate_auth(self, AuthFlow, AuthParameters, ClientId):
+                received["AuthParameters"] = AuthParameters
+                return {
+                    "AuthenticationResult": {
+                        "AccessToken": "new-access-token",
+                        "ExpiresIn": 86400,
+                    }
+                }
+
+        self._patch_client(monkeypatch, _FakeClient())
+
+        cognito.refresh_cognito_access_token("some-refresh-token")
+
+        assert received["AuthParameters"] == {"REFRESH_TOKEN": "some-refresh-token"}
+
+    def test_uses_client_id_from_settings_not_hardcoded(self, monkeypatch):
+        received = {}
+
+        class _FakeClient:
+            def initiate_auth(self, AuthFlow, AuthParameters, ClientId):
+                received["ClientId"] = ClientId
+                return {
+                    "AuthenticationResult": {
+                        "AccessToken": "new-access-token",
+                        "ExpiresIn": 86400,
+                    }
+                }
+
+        self._patch_client(monkeypatch, _FakeClient())
+
+        cognito.refresh_cognito_access_token("some-refresh-token")
+
+        assert received["ClientId"] == settings.COGNITO_CLIENT_ID
+
+    def test_success_returns_authentication_result(self, monkeypatch):
+        class _FakeClient:
+            def initiate_auth(self, AuthFlow, AuthParameters, ClientId):
+                return {
+                    "AuthenticationResult": {
+                        "AccessToken": "new-access-token",
+                        "ExpiresIn": 86400,
+                        "TokenType": "Bearer",
+                    }
+                }
+
+        self._patch_client(monkeypatch, _FakeClient())
+
+        result = cognito.refresh_cognito_access_token("some-refresh-token")
+
+        assert result["AccessToken"] == "new-access-token"
+        assert result["ExpiresIn"] == 86400
+
+    def test_response_does_not_include_new_refresh_token_when_rotation_disabled(
+        self, monkeypatch
+    ):
+        """Refresh Token Rotation이 비활성화된 App Client는 Cognito가
+        새 refresh token을 내려주지 않는다. 이 함수는 그런 값을
+        임의로 만들어내지 않고 Cognito 응답을 그대로 전달해야 한다."""
+
+        class _FakeClient:
+            def initiate_auth(self, AuthFlow, AuthParameters, ClientId):
+                return {
+                    "AuthenticationResult": {
+                        "AccessToken": "new-access-token",
+                        "ExpiresIn": 86400,
+                    }
+                }
+
+        self._patch_client(monkeypatch, _FakeClient())
+
+        result = cognito.refresh_cognito_access_token("some-refresh-token")
+
+        assert "RefreshToken" not in result
+
+    def test_not_authorized_raises_value_error(self, monkeypatch):
+        """만료되었거나 잘못된 Refresh Token은 Cognito가
+        NotAuthorizedException으로 거절한다."""
+        from botocore.exceptions import ClientError
+
+        class _FakeClient:
+            def initiate_auth(self, AuthFlow, AuthParameters, ClientId):
+                raise ClientError(
+                    {"Error": {"Code": "NotAuthorizedException", "Message": "invalid"}},
+                    "InitiateAuth",
+                )
+
+        self._patch_client(monkeypatch, _FakeClient())
+
+        with pytest.raises(ValueError):
+            cognito.refresh_cognito_access_token("bad-refresh-token")
+
+    def test_service_error_raises_runtime_error(self, monkeypatch):
+        from botocore.exceptions import ClientError
+
+        class _FakeClient:
+            def initiate_auth(self, AuthFlow, AuthParameters, ClientId):
+                raise ClientError(
+                    {"Error": {"Code": "InternalErrorException", "Message": "boom"}},
+                    "InitiateAuth",
+                )
+
+        self._patch_client(monkeypatch, _FakeClient())
+
+        with pytest.raises(RuntimeError):
+            cognito.refresh_cognito_access_token("some-refresh-token")
+
+    def test_network_failure_raises_runtime_error(self, monkeypatch):
+        from botocore.exceptions import EndpointConnectionError
+
+        class _FakeClient:
+            def initiate_auth(self, AuthFlow, AuthParameters, ClientId):
+                raise EndpointConnectionError(endpoint_url="https://cognito-idp.example.com")
+
+        self._patch_client(monkeypatch, _FakeClient())
+
+        with pytest.raises(RuntimeError):
+            cognito.refresh_cognito_access_token("some-refresh-token")
