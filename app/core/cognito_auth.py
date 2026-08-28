@@ -12,6 +12,11 @@ Cognito API들이 공통으로 필요로 하는 SECRET_HASH 계산만 우선
 Phase 1 범위: SECRET_HASH 계산 함수만 구현한다. SignUp 등 실제 API
 wrapper는 그 기능을 실제로 사용하는 Phase 3/4/5에서 추가한다(미리
 만들어두고 쓰지 않는 코드를 최소화하기 위함).
+
+Phase 3(CLIAR-151): SignUp/ConfirmSignUp/ResendConfirmationCode +
+보상용 admin API wrapper 추가.
+Phase 4(CLIAR-153): InitiateAuth(USER_PASSWORD_AUTH/REFRESH_TOKEN_AUTH),
+GetUser(sub 조회), RevokeToken wrapper 추가.
 """
 
 import base64
@@ -184,13 +189,15 @@ def admin_delete_user(*, email: str) -> None:
     )
 
 
-def extract_sub_from_admin_get_user(response: dict) -> str:
+def extract_sub_from_user_attributes(response: dict) -> str:
     """
-    AdminGetUser 응답의 UserAttributes 목록에서 sub 값을 추출한다.
+    Cognito 응답의 UserAttributes 목록에서 sub 값을 추출한다.
 
-    app.core.cognito.get_cognito_user_email이 GetUser 응답에서 email
-    속성을 찾는 것과 동일한 패턴이다. sub 속성이 없으면(비정상 응답)
-    ValueError를 던진다.
+    AdminGetUser와 GetUser는 응답 형태가 동일하게 UserAttributes
+    목록을 갖는다. app.core.cognito.get_cognito_user_email이 GetUser
+    응답에서 email 속성을 찾는 것과 동일한 패턴이며, 두 API가 같은
+    추출 로직을 공유하도록 이 함수 하나만 둔다. sub 속성이
+    없으면(비정상 응답) ValueError를 던진다.
     """
     for attribute in response.get("UserAttributes", []):
         if attribute.get("Name") == "sub":
@@ -198,4 +205,144 @@ def extract_sub_from_admin_get_user(response: dict) -> str:
             if value:
                 return value
 
-    raise ValueError("AdminGetUser response is missing the 'sub' attribute")
+    raise ValueError("Cognito response is missing the 'sub' attribute")
+
+
+def extract_sub_from_admin_get_user(response: dict) -> str:
+    """
+    AdminGetUser 응답에서 sub를 추출한다(Phase 3 orphan recovery).
+
+    실제 추출은 extract_sub_from_user_attributes와 동일하다. 기존
+    호출부/테스트가 사용하는 이름을 그대로 유지하기 위해 남겨둔 얇은
+    별칭이다.
+    """
+    return extract_sub_from_user_attributes(response)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 (CLIAR-153): 로그인 / 토큰 갱신 / 로그아웃 wrapper.
+#
+# Phase 3 wrapper들과 동일한 규칙을 따른다: boto3 예외
+# (ClientError/EndpointConnectionError)를 여기서 잡지 않고 그대로
+# 전파하며, HTTP 매핑은 호출자(app/services/login_service.py)가
+# app/core/cognito_errors.py를 통해 한 곳에서만 결정한다.
+#
+# 이 모듈의 모든 호출은 신규 backend 전용 App Client(secret 있음)를
+# 사용한다. 기존 FE App Client(settings.COGNITO_CLIENT_ID, secret 없음)
+# 를 쓰는 app/core/cognito.py의 refresh_cognito_access_token(CLIAR-125
+# legacy 경로)과는 의도적으로 분리되어 있다.
+#
+# 토큰/비밀번호/secret 값은 이 모듈에서 로깅하지 않는다.
+# ---------------------------------------------------------------------------
+
+
+def _require_backend_client_credentials() -> tuple[str, str]:
+    """
+    Client Secret 자체를 직접 API 파라미터로 넘겨야 하는 호출
+    (RevokeToken)에서 설정값을 꺼낸다.
+
+    secret_hash()와 동일하게, 설정이 비어 있으면 조용히 잘못된 값으로
+    호출하지 않고 명확한 RuntimeError로 실패시킨다.
+    """
+    client_id = settings.COGNITO_BACKEND_CLIENT_ID
+    client_secret = settings.COGNITO_BACKEND_CLIENT_SECRET
+
+    if not client_id or not client_secret:
+        raise RuntimeError(
+            "COGNITO_BACKEND_CLIENT_ID/COGNITO_BACKEND_CLIENT_SECRET "
+            "must be configured to call the Cognito backend App Client"
+        )
+
+    return client_id, client_secret
+
+
+def initiate_password_auth(*, email: str, password: str) -> dict:
+    """
+    이메일 + 비밀번호로 Cognito InitiateAuth(USER_PASSWORD_AUTH)를
+    호출한다 (PLAN.md §4.2).
+
+    SECRET_HASH의 username은 InitiateAuth에 넘기는 USERNAME과 동일한
+    값(=email)이어야 한다. Cognito가 SECRET_HASH를 검증할 때
+    "요청에 담긴 USERNAME + client_id"로 다시 계산해 비교하기
+    때문이다.
+
+    반환값은 boto3 initiate_auth() 응답 원본이다
+    (AuthenticationResult 또는 ChallengeName 포함).
+    """
+    hash_value = secret_hash(email)
+    client = get_cognito_idp_client()
+    return client.initiate_auth(
+        AuthFlow="USER_PASSWORD_AUTH",
+        ClientId=_require_backend_client_id(),
+        AuthParameters={
+            "USERNAME": email,
+            "PASSWORD": password,
+            "SECRET_HASH": hash_value,
+        },
+    )
+
+
+def refresh_auth(*, refresh_token: str, sub: str) -> dict:
+    """
+    Refresh Token으로 Cognito InitiateAuth(REFRESH_TOKEN_AUTH)를
+    호출한다 (PLAN.md §4.3).
+
+    SECRET_HASH의 username은 반드시 Cognito username(=sub)이어야
+    한다. REFRESH_TOKEN_AUTH 요청에는 USERNAME 파라미터가 없지만
+    Cognito는 내부적으로 refresh token이 가리키는 사용자의 username
+    으로 SECRET_HASH를 검증한다. refresh token 자체는 opaque
+    문자열이라 BE가 여기서 sub를 추출할 수 없으므로, 로그인 시점에
+    내려둔 refresh_sub 쿠키 값을 호출자가 넘겨준다.
+
+    반환값은 boto3 initiate_auth() 응답 원본이다. Refresh Token
+    Rotation이 활성화된 경우 AuthenticationResult에 새 RefreshToken이
+    포함될 수 있다(현재 dev App Client는 비활성).
+    """
+    hash_value = secret_hash(sub)
+    client = get_cognito_idp_client()
+    return client.initiate_auth(
+        AuthFlow="REFRESH_TOKEN_AUTH",
+        ClientId=_require_backend_client_id(),
+        AuthParameters={
+            "REFRESH_TOKEN": refresh_token,
+            "SECRET_HASH": hash_value,
+        },
+    )
+
+
+def revoke_refresh_token(*, refresh_token: str) -> None:
+    """
+    Cognito RevokeToken으로 refresh token을 무효화한다
+    (PLAN.md §4.3, POST /auth/logout).
+
+    RevokeToken은 SECRET_HASH가 아니라 ClientSecret 자체를 파라미터로
+    받는 몇 안 되는 non-admin API다(AWS 계약). App Client에서 token
+    revocation이 활성화되어 있어야 한다(PLAN.md §8.1).
+    """
+    client_id, client_secret = _require_backend_client_credentials()
+    client = get_cognito_idp_client()
+    client.revoke_token(
+        Token=refresh_token,
+        ClientId=client_id,
+        ClientSecret=client_secret,
+    )
+
+
+def get_user_sub(*, access_token: str) -> str:
+    """
+    방금 발급받은 Access Token으로 Cognito GetUser를 호출해 sub를
+    얻는다.
+
+    로그인 응답의 Access Token/ID Token 문자열을 서명 검증 없이
+    직접 파싱하지 않기 위한 경로다. 여기서 얻는 sub는 client가
+    보낸 값이 아니라 Cognito API 응답에서 온 값이므로, member 조회
+    키로 그대로 신뢰할 수 있다.
+
+    기존 app.core.cognito.get_cognito_user_email이 같은 GetUser
+    응답에서 email을 꺼내는 것과 동일한 패턴이며, IAM 권한을
+    요구하지 않는다(access token으로만 인가된다). ClientError/
+    EndpointConnectionError는 잡지 않고 그대로 전파한다.
+    """
+    client = get_cognito_idp_client()
+    response = client.get_user(AccessToken=access_token)
+    return extract_sub_from_user_attributes(response)

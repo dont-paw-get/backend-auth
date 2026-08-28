@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, SecretStr, field_validator
 
 from app.models.user import Gender
+from app.schemas.user import MemberResponse
 
 
 class SignupRequest(BaseModel):
@@ -109,7 +110,16 @@ class SignupResendRequest(BaseModel):
 
 class RefreshTokenRequest(BaseModel):
     """
-    POST /api/v1/auth/refresh 요청 schema (CLIAR-125).
+    POST /api/v1/auth/refresh 요청 schema (CLIAR-125) — LEGACY.
+
+    ⚠️ 이 schema는 과도기 하위호환 전용이다. CLIAR-153(Phase 4)부터
+    /auth/refresh의 최종 계약은 "request body 없음 + refresh_token /
+    refresh_sub HttpOnly 쿠키"이며, 이 body는 아직 쿠키 방식으로
+    전환하지 않은 기존 FE를 깨뜨리지 않기 위해서만 남아 있다.
+    쿠키가 존재하면 항상 쿠키 방식이 우선한다.
+
+    PLAN.md §12 Phase 7에서 FE 전환 완료를 확인한 뒤 이 schema와
+    legacy 분기를 함께 제거한다.
 
     Access Token이 만료됐을 때 Cognito Refresh Token으로 새 Access
     Token을 재발급받기 위한 요청이다. 이 endpoint는 Bearer Access
@@ -143,6 +153,56 @@ class RefreshTokenResponse(BaseModel):
     token_type: str = "Bearer"
     expires_in: int
     id_token: str | None = None
+
+
+class LoginRequest(BaseModel):
+    """
+    POST /api/v1/auth/login 요청 schema (CLIAR-153, PLAN.md §5).
+
+    password는 SecretStr로 선언해 repr()/로그/예외 메시지에 평문이
+    노출되지 않게 한다(SignupRequest와 동일한 정책, PLAN.md §9.3).
+    실제 값이 필요한 곳에서만 get_secret_value()로 명시적으로 꺼낸다.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: str
+    password: SecretStr
+
+    @field_validator("email")
+    @classmethod
+    def email_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("email must not be empty or blank")
+        return value
+
+    @field_validator("password")
+    @classmethod
+    def password_must_not_be_blank(cls, value: SecretStr) -> SecretStr:
+        if not value.get_secret_value().strip():
+            # 예외 메시지에 입력값 자체를 포함하지 않는다(PLAN.md §9.3).
+            raise ValueError("password must not be empty or blank")
+        return value
+
+
+class LoginResponse(BaseModel):
+    """
+    POST /api/v1/auth/login 응답 schema (PLAN.md §4.2, §5).
+
+    Refresh Token은 이 응답 body에 포함하지 않는다. XSS로 탈취되지
+    않도록 HttpOnly 쿠키(refresh_token)로만 전달하기 때문이다(D3).
+    Cognito sub 역시 body가 아니라 refresh_sub HttpOnly 쿠키로만
+    전달한다.
+
+    id_token은 Cognito 응답에 포함되어 있으면 함께 반환한다
+    (RefreshTokenResponse와 동일하게 선택 필드로 둔다).
+    """
+
+    access_token: str
+    token_type: str = "Bearer"
+    expires_in: int
+    id_token: str | None = None
+    member: MemberResponse
 
 
 class AvailabilityField(str, Enum):

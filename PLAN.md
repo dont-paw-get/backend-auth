@@ -77,7 +77,7 @@ FE                    BE                              Cognito          RDS
 │                     │                               │                │
 ├─POST /auth/signup──▶│                               │                │
 │  email, password,   │                               │                │
-│  nickname, birth,   ├─① 이메일/닉네임 사전 검증 ─────────────────────▶│
+│  nickname, birth,   ├─① 이메일 사전 검증 ─────────────────────────────▶│
 │  gender, 약관동의    │                               │                │
 │                     ├─② SignUp(SECRET_HASH)────────▶│                │
 │                     │◀──UserSub─────────────────────┤                │
@@ -91,6 +91,14 @@ FE                    BE                              Cognito          RDS
 │  email, code        ├─⑤ member UPDATE → ACTIVE─────────────────────▶│
 │◀─200────────────────┤                               │                │
 ```
+
+**① 사전 검증은 email만 대상으로 한다.** CLIAR-144 최종 정책상
+`member.nickname`은 UNIQUE 제약이 없고 중복을 허용하므로,
+`/auth/signup`은 nickname 중복 여부를 검사하지 않는다(구현:
+`app/services/signup_service.py`, `app/api/auth.py`의
+`signup_endpoint` docstring 참고). `/auth/availability`가 여전히
+`NICKNAME` field를 지원하는 것은 그 엔드포인트의 기존 계약을
+유지하기 위함이며, signup 정책의 근거로 쓰이지 않는다(§7.2 참고).
 
 **③ 실패 시 보상**: `AdminDeleteUser`로 Cognito 계정을 즉시 삭제하고 500을 반환한다.
 사용자는 같은 이메일로 바로 재시도할 수 있다.
@@ -264,7 +272,7 @@ def upgrade():
 | `app/api/deps.py` `get_current_member` | `PENDING`이면 403 (`EMAIL_NOT_VERIFIED`) |
 | `app/api/deps.py` `get_member_by_sub` | 그대로 반환 (상태 무검사 유지) |
 | `UserRepository.exists_by_email` | `PENDING`도 "사용 중"으로 계산 (Cognito가 이미 점유) |
-| `UserRepository.exists_by_nickname` | 동일 |
+| `UserRepository.exists_by_nickname` | `PENDING` 포함 전 상태에서 중복을 계산하지만, `/auth/signup`은 이 메서드를 호출하지 않는다(nickname은 UNIQUE가 아니며 중복을 허용하므로, §4.1 참고). `/auth/availability`(legacy)에서만 사용된다 |
 | `DELETE /users/me` | `PENDING`에서도 탈퇴 가능 |
 
 ## 8. 인프라 변경
@@ -281,7 +289,8 @@ AWS 콘솔 → User Pool `ap-northeast-2_y1mKz50El` → App client 생성.
 | `ALLOW_USER_SRP_AUTH` | 비활성화 | BE는 SRP를 쓰지 않음 |
 | Enable token revocation | 활성화 | `/auth/logout`의 `RevokeToken` |
 | Prevent user existence errors | 활성화 | 사용자 열거 방지 (§6과 이중 방어) |
-| Access token 유효기간 | 1시간 | |
+| Access token 유효기간 | 1일 | |
+| ID token 유효기간 | 1일 | |
 | Refresh token 유효기간 | 30일 | |
 | Read/write attributes | `email` 포함 | 기존 `GetUser` 경로 유지 |
 
@@ -290,9 +299,15 @@ User Pool 측: 로그인 식별자로 `email` alias가 활성화되어 있어야
 `aws.cognito.signin.user.admin` scope는 `InitiateAuth`로 발급된 access token에 자동 포함되므로,
 기존 `get_cognito_user_email` / `delete_cognito_user` / 신규 `ChangePassword`가 그대로 동작한다.
 
-생성 후 dev configmap의 `COGNITO_CLIENT_ID`를 신규 값으로 교체하고,
-`COGNITO_CLIENT_SECRET`을 k8s Secret에 추가한다. 기존 App Client는
-FE 전환 완료 확인 후 삭제한다(코드는 신규 client_id만 허용).
+생성 후 신규 App Client의 `COGNITO_BACKEND_CLIENT_ID`를 dev
+ConfigMap에, `COGNITO_BACKEND_CLIENT_SECRET`을 k8s Secret에
+추가한다(§8.3). 기존 `COGNITO_CLIENT_ID`는 교체하지 않고 그대로
+둔다 — CLIAR-153(Phase 4) 구현부터 이 값은 기존 FE App Client가
+발급한 Access Token 검증(`app/core/cognito.py:verify_cognito_token`)
+과 CLIAR-125 legacy refresh 과도기 호환을 위한 **별도의 상시
+설정**이며, 신규 backend App Client와 교체되는 관계가 아니다. 기존
+FE App Client는 FE 전환 완료 확인 후 삭제하되, 삭제 시점에는
+`COGNITO_CLIENT_ID`/legacy refresh 경로도 함께 정리한다(Phase 7).
 
 ### 8.2 IRSA (D2)
 
@@ -327,7 +342,11 @@ FE 전환 완료 확인 후 삭제한다(코드는 신규 client_id만 허용).
 `app/core/config.py`
 
 ```python
-COGNITO_CLIENT_SECRET: str          # k8s Secret (현재 Settings에 누락되어 있음)
+# 신규 backend 전용 App Client(secret 있음). CLIAR-153(Phase 4)에서
+# 실제로 사용 중이며, 기존 COGNITO_CLIENT_ID(FE App Client, secret
+# 없음)와는 별개의 값이다 — 하나가 다른 하나를 대체하지 않는다.
+COGNITO_BACKEND_CLIENT_ID: str | None = None      # Kubernetes ConfigMap
+COGNITO_BACKEND_CLIENT_SECRET: str | None = None  # Kubernetes Secret
 
 CORS_ALLOWED_ORIGINS: str = ""      # CSV, 쿠키 사용 시 필수
 COOKIE_SECURE: bool = True          # dev(http) 검증 시에만 False
@@ -340,7 +359,12 @@ RATE_LIMIT_PASSWORD: str = "5/minute"
 RATE_LIMIT_AVAILABILITY: str = "30/minute"
 ```
 
-`k8s/secret.example.yaml`은 이미 `COGNITO_CLIENT_SECRET` 항목을 갖고 있으므로 주석만 갱신한다.
+`k8s/secret.example.yaml`은 `COGNITO_CLIENT_SECRET`이라는 이전 이름의
+placeholder 항목을 갖고 있다. 실제 배포(Phase 0/7)에서는 이를
+`COGNITO_BACKEND_CLIENT_SECRET`으로, `COGNITO_BACKEND_CLIENT_ID`는
+Secret이 아니라 `k8s/base/configmap.yaml`(ConfigMap)에 추가해야
+한다. 이 티켓에서는 실제 k8s manifest 값이나 secret을 넣지 않았으므로
+파일 자체는 아직 이전 이름 그대로다.
 
 ### 8.4 CORS (신규)
 
@@ -426,8 +450,8 @@ FastAPI에는 내장 기능이 없다. prod replicas가 2 이상이면 인메모
 | `app/main.py` | CORS 미들웨어 추가 |
 | `k8s/base/deployment.yaml` | `serviceAccountName` 추가 |
 | `k8s/base/kustomization.yaml` | serviceaccount.yaml 등록 |
-| `k8s/overlays/dev/configmap-patch.yaml` | 신규 `COGNITO_CLIENT_ID` |
-| `k8s/secret.example.yaml` | `COGNITO_CLIENT_SECRET` 주석 갱신 |
+| `k8s/base/configmap.yaml` / `k8s/overlays/dev/configmap-patch.yaml` | 신규 `COGNITO_BACKEND_CLIENT_ID` 추가(기존 `COGNITO_CLIENT_ID`는 유지, §8.1) |
+| `k8s/secret.example.yaml` | `COGNITO_CLIENT_SECRET` → `COGNITO_BACKEND_CLIENT_SECRET`으로 이름 갱신 |
 | `.env.example` | 신규 설정값 반영 |
 | `requirements.txt` | 추가 의존성 없음 (boto3 이미 존재) |
 
@@ -465,7 +489,7 @@ boto3 호출은 `botocore.stub.Stubber` 또는 `get_cognito_idp_client` monkeypa
 | 1 | 설정·공통 기반 (`config.py`, `cognito_auth.py`, `cognito_errors.py`, `cookies.py`) | 단위 테스트 통과 | 0 | |
 | 2 | DB 마이그레이션 (`PENDING`) + 모델/deps/repository 반영 | alembic revision | — | **완료** |
 | 3 | 회원가입 3종 (`signup` / `confirm` / `resend`) + 보상·복구 | 엔드포인트 + 테스트 | 1, 2 | |
-| 4 | 로그인/갱신/로그아웃 + 쿠키 + CORS | 엔드포인트 + 테스트 | 1, 2 | |
+| 4 | 로그인/갱신/로그아웃 + 쿠키 + CORS | 엔드포인트 + 테스트 | 1, 2 | **완료** |
 | 5 | 비밀번호 3종 | 엔드포인트 + 테스트 | 1 | |
 | 6 | Rate limiting + 보안 하드닝 + 감사 로그 | 미들웨어/dependency + 테스트 | 3, 4, 5 | |
 | 7 | `/users/bootstrap` 제거, k8s 매니페스트 갱신, dev 배포·통합 검증 | 배포 | 6 | |
@@ -481,11 +505,70 @@ Phase 3/4/5는 Phase 1·2 완료 후 병렬 진행이 가능하다.
 - `UserRepository.get_by_email` 추가
 - 테스트 188 → 206개 통과
 
-**남은 검증**: 실제 PostgreSQL에 대한 `alembic upgrade head` 실행.
-오프라인 SQL 생성(`alembic upgrade --sql`)으로 `COMMIT` → `ALTER TYPE`
-순서가 의도대로 나오는 것은 확인했으나, 로컬에 Docker 데몬이 떠 있지
-않아 실 DB 적용은 하지 못했다. dev 배포 전에 반드시 확인해야 한다
-(§13의 "마이그레이션 실패로 initContainer 크래시" 위험).
+**실 PostgreSQL 검증 완료**: 실제 PostgreSQL 18에 대해
+`alembic upgrade head` / `downgrade` / 재 `upgrade`를 모두 실행해
+확인했다.
+
+| 단계 | `member_status` ENUM 값 |
+|---|---|
+| upgrade 전 | `ACTIVE`, `WITHDRAWN` |
+| upgrade 후 (`9b41c7d2e5f3`) | `ACTIVE`, `WITHDRAWN`, `PENDING` |
+| downgrade 후 | `ACTIVE`, `WITHDRAWN` |
+| 재 upgrade 후 (head=`9b41c7d2e5f3`) | `ACTIVE`, `WITHDRAWN`, `PENDING` |
+
+`op.execute("COMMIT")` → `ALTER TYPE ADD VALUE` 순서가 트랜잭션 오류
+없이 동작함을 실 DB로 확인했으므로, §13의 "마이그레이션 실패로
+initContainer 크래시" 위험은 이 마이그레이션 자체에 대해서는 해소된
+것으로 본다.
+
+### Phase 4 완료 기록 (2026-08-28, CLIAR-153)
+
+- `app/services/login_service.py` 신규: login / refresh / logout 오케스트레이션
+- `app/core/cognito_auth.py`: `initiate_password_auth` / `refresh_auth` /
+  `revoke_refresh_token` / `get_user_sub` 추가
+- `app/api/auth.py`: `POST /auth/login`, `POST /auth/logout` 신규,
+  `POST /auth/refresh`를 쿠키 기반으로 전환
+- `app/main.py`: CORS 미들웨어(`configure_cors`) 추가
+- 테스트 319 → 440개 통과
+
+**Cognito sub 확보 방식**: 로그인 응답의 Access Token 문자열을 서명 검증 없이
+파싱하지 않고, 그 토큰으로 Cognito `GetUser`를 호출해 `sub`를 얻는다.
+`verify_cognito_token`은 access token의 `client_id` claim이
+`COGNITO_CLIENT_ID`(기존 FE App Client)와 같은지 검사하므로, 신규 backend App
+Client가 발급한 토큰에는 그대로 쓸 수 없다.
+
+**과도기 호환 (Phase 7에서 제거)**: `/auth/refresh`는 쿠키가 있으면 신규
+경로(backend App Client + `SECRET_HASH=f(refresh_sub)`), 쿠키가 없고 body에
+`refresh_token`이 있으면 CLIAR-125 legacy 경로(기존 FE App Client, SECRET_HASH
+없음)를 그대로 사용한다. 기존 body 방식에 신규 client secret을 적용하지
+않는다(적용하면 기존 FE가 가진 refresh token이 즉시 거부된다).
+
+**남은 배포 설정** (코드 밖, Phase 0/7 범위):
+
+1. `COGNITO_BACKEND_CLIENT_ID` / `COGNITO_BACKEND_CLIENT_SECRET`을 dev
+   configmap/Secret에 주입. 없으면 `/auth/login`·쿠키 `/auth/refresh`가
+   `secret_hash()`의 `RuntimeError`로 500이 된다(`/auth/logout`은 이 경우에도
+   쿠키만 지우고 204).
+2. `CORS_ALLOWED_ORIGINS`에 실제 FE origin 주입. 비어 있으면 cross-origin
+   요청이 전혀 허용되지 않는다(코드에 하드코딩하지 않았다).
+3. dev(http) 검증 시 `COOKIE_SECURE=False`.
+4. `verify_cognito_token`(`app/core/cognito.py`)은 여전히 access
+   token의 `client_id` claim을 `COGNITO_CLIENT_ID`(기존 FE App
+   Client)와 비교한다. 그런데 `/auth/login`이 발급하는 access token은
+   `COGNITO_BACKEND_CLIENT_ID`로 발급된 것이므로, 이 검증을 그대로
+   두면 로그인 직후 그 access token으로 `/users/me` 등을 호출할 때
+   401이 난다. §8.1에서 `COGNITO_CLIENT_ID`를 신규 backend App
+   Client와 교체하지 않고 별도로 유지하기로 한 것과 이 항목이
+   상충하므로, Phase 5/6 착수 전에 다음 중 하나로 명시적으로
+   해결해야 한다: (a) `verify_cognito_token`이
+   `COGNITO_BACKEND_CLIENT_ID`도 허용하도록 확장, 또는 (b) FE 전환
+   완료 시점(Phase 7)에 `COGNITO_CLIENT_ID` 값 자체를 backend App
+   Client로 교체. 이번 Phase 4 범위에서는 `verify_cognito_token`
+   자체를 변경하지 않았으므로(수정 금지 범위), 이 미해결 상태를
+   그대로 남겨 다음 Phase에 넘긴다.
+
+실제 AWS에 대한 E2E(login → refresh → logout)는 위 설정이 주입되지 않아
+수행하지 않았다.
 
 ## 13. 위험 요소
 
