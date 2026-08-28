@@ -13,6 +13,7 @@ from app.core.cookies import (
     set_refresh_cookies,
 )
 from app.core.database import get_db
+from app.core.security import bearer_scheme, get_current_access_token
 from app.repositories.member_agreement_repository import MemberAgreementRepository
 from app.repositories.terms_repository import TermsRepository
 from app.repositories.user_repository import UserRepository
@@ -21,6 +22,9 @@ from app.schemas.auth import (
     AvailabilityResponse,
     LoginRequest,
     LoginResponse,
+    PasswordChangeRequest,
+    PasswordForgotRequest,
+    PasswordResetRequest,
     RefreshTokenRequest,
     RefreshTokenResponse,
     SignupConfirmRequest,
@@ -44,6 +48,11 @@ from app.services.member_service import (
     InvalidNicknameError,
     RequiredConsentNotAgreedError,
     RequiredTermsNotConfiguredError,
+)
+from app.services.password_service import (
+    change_password,
+    forgot_password,
+    reset_password,
 )
 from app.services.signup_service import (
     ConfirmPersistenceError,
@@ -416,6 +425,81 @@ def signup_resend_endpoint(payload: SignupResendRequest):
     """
     try:
         resend_signup_code(email=payload.email)
+    except CognitoApiError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+    return None
+
+
+@router.post("/password/forgot", status_code=status.HTTP_204_NO_CONTENT)
+def password_forgot_endpoint(payload: PasswordForgotRequest):
+    """
+    비밀번호 재설정 코드를 이메일로 발송한다 (CLIAR-157, PLAN.md
+    §4.4).
+
+    가입 여부와 무관하게 항상 204를 반환한다. 미가입 이메일임을
+    응답 차이로 노출하지 않기 위해서다(user enumeration 방지,
+    §16). 실제 판단은 app/services/password_service.py의
+    forgot_password가 UserNotFoundException을 흡수하는 방식으로
+    수행하며, 이 함수는 그 결과를 그대로 204로 응답한다.
+
+    TooManyRequests/LimitExceeded 등 그 외 Cognito 오류는 기존
+    cognito_errors 매핑을 그대로 따른다(429/502 등).
+    """
+    try:
+        forgot_password(email=payload.email)
+    except CognitoApiError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+    return None
+
+
+@router.post("/password/reset", status_code=status.HTTP_204_NO_CONTENT)
+def password_reset_endpoint(payload: PasswordResetRequest):
+    """
+    인증 코드로 비밀번호를 재설정한다 (CLIAR-157, PLAN.md §4.4).
+
+    아직 로그인하지 않은 사용자가 호출하는 API이므로 Bearer 인증을
+    요구하지 않는다. CodeMismatchException/ExpiredCodeException/
+    InvalidPasswordException 등은 모두 기존 cognito_errors 매핑을
+    그대로 따른다.
+    """
+    try:
+        reset_password(
+            email=payload.email,
+            code=payload.code,
+            new_password=payload.new_password.get_secret_value(),
+        )
+    except CognitoApiError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+    return None
+
+
+@router.post(
+    "/password/change",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(bearer_scheme)],
+)
+def password_change_endpoint(
+    payload: PasswordChangeRequest,
+    access_token: str = Depends(get_current_access_token),
+):
+    """
+    로그인 상태에서 비밀번호를 변경한다 (CLIAR-157, PLAN.md §4.4).
+
+    Bearer Access Token이 필수다. 인증 대상은 오직
+    get_current_access_token이 검증한 토큰에서만 얻으며,
+    request body는 current_password/new_password만 받는다 —
+    client가 member_id/sub/email 등을 보내 인증 대상을 스스로
+    결정하게 하지 않는다.
+    """
+    try:
+        change_password(
+            access_token=access_token,
+            current_password=payload.current_password.get_secret_value(),
+            new_password=payload.new_password.get_secret_value(),
+        )
     except CognitoApiError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 

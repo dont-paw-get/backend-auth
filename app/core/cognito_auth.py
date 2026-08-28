@@ -346,3 +346,84 @@ def get_user_sub(*, access_token: str) -> str:
     client = get_cognito_idp_client()
     response = client.get_user(AccessToken=access_token)
     return extract_sub_from_user_attributes(response)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 (CLIAR-157): 비밀번호 찾기 / 재설정 / 변경 wrapper.
+#
+# Phase 3/4 wrapper들과 동일한 규칙을 따른다: boto3 예외
+# (ClientError/EndpointConnectionError)를 여기서 잡지 않고 그대로
+# 전파하며, HTTP 매핑은 호출자(app/services/password_service.py)가
+# app/core/cognito_errors.py를 통해 한 곳에서만 결정한다.
+#
+# forgot_password/confirm_forgot_password는 신규 backend App
+# Client(secret 있음)로 SECRET_HASH=f(email)을 계산해 호출한다.
+# change_password는 SECRET_HASH를 쓰지 않는다(AWS 계약: Access
+# Token만으로 인가되는 non-SRP API라 username/client_id를 별도로
+# 넘기지 않는다).
+#
+# 비밀번호/코드/토큰/secret 값은 이 모듈에서 로깅하지 않는다.
+# ---------------------------------------------------------------------------
+
+
+def forgot_password(*, email: str) -> dict:
+    """
+    Cognito ForgotPassword를 호출해 비밀번호 재설정 코드를 발송한다.
+
+    UserNotFoundException을 포함한 모든 ClientError/
+    EndpointConnectionError는 이 함수가 잡지 않고 그대로 전파한다.
+    사용자 열거 방지(가입되지 않은 이메일이어도 외부 응답은 204)는
+    호출자(app/services/password_service.py)가 결정한다 — Cognito
+    API 호출 자체는 그 정책을 알 필요가 없다.
+
+    반환값은 boto3 forgot_password() 응답 원본이다
+    (CodeDeliveryDetails 포함).
+    """
+    hash_value = secret_hash(email)
+    client = get_cognito_idp_client()
+    return client.forgot_password(
+        ClientId=_require_backend_client_id(),
+        SecretHash=hash_value,
+        Username=email,
+    )
+
+
+def confirm_forgot_password(
+    *, email: str, confirmation_code: str, new_password: str
+) -> None:
+    """
+    Cognito ConfirmForgotPassword를 호출해 인증 코드로 비밀번호를
+    재설정한다.
+
+    ClientError(예: CodeMismatchException, ExpiredCodeException,
+    InvalidPasswordException)는 잡지 않고 그대로 전파한다.
+    """
+    hash_value = secret_hash(email)
+    client = get_cognito_idp_client()
+    client.confirm_forgot_password(
+        ClientId=_require_backend_client_id(),
+        SecretHash=hash_value,
+        Username=email,
+        ConfirmationCode=confirmation_code,
+        Password=new_password,
+    )
+
+
+def change_password(
+    *, access_token: str, previous_password: str, new_password: str
+) -> None:
+    """
+    로그인 상태(Access Token)에서 Cognito ChangePassword를 호출해
+    비밀번호를 변경한다.
+
+    ChangePassword는 Username/ClientId/SecretHash를 받지 않는다 —
+    AccessToken 자체가 인가 대상을 특정하므로, 클라이언트가 별도로
+    보낸 member_id/sub/email 등을 인증 대상 결정에 쓰지 않는다(그런
+    파라미터 자체가 이 API에 존재하지 않는다).
+    """
+    client = get_cognito_idp_client()
+    client.change_password(
+        AccessToken=access_token,
+        PreviousPassword=previous_password,
+        ProposedPassword=new_password,
+    )
