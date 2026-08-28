@@ -52,6 +52,14 @@ class Settings(BaseSettings):
     COOKIE_SAMESITE: str = "lax"
     COOKIE_DOMAIN: str | None = None
 
+    # CLIAR-160 (Phase 6): app/core/rate_limit.py가 소비하는 인증 API
+    # rate limit 정책값. PLAN.md §8.3/§9.1에 이미 정의되어 있던 값을
+    # 그대로 가져온다(이번 티켓에서 새로 정한 숫자가 아니다). 형식은
+    # "<count>/<second|minute|hour>".
+    RATE_LIMIT_LOGIN: str = "10/minute"
+    RATE_LIMIT_SIGNUP: str = "5/minute"
+    RATE_LIMIT_PASSWORD: str = "5/minute"
+
     @property
     def cors_allowed_origins_list(self) -> list[str]:
         """
