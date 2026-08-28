@@ -166,6 +166,43 @@ class TestWithdrawSuccess:
         assert before <= recorded <= after
 
 
+class TestWithdrawPendingMember:
+    """
+    이메일 인증을 끝내지 않은 PENDING 회원도 탈퇴할 수 있어야 한다.
+
+    DELETE /users/me는 get_current_member(ACTIVE 검사 포함)가 아니라
+    get_member_by_sub를 쓰므로 PENDING 회원도 이 endpoint에 도달한다.
+    탈퇴 처리 분기는 status가 ACTIVE인지가 아니라 WITHDRAWN이 아닌지로
+    판단하므로, PENDING -> WITHDRAWN 전이가 그대로 동작해야 한다.
+    """
+
+    def test_pending_member_withdrawal_returns_204(
+        self, client, db_session, monkeypatch
+    ):
+        member = _create_member(db_session, status=MemberStatus.PENDING)
+        headers = _authenticate_as(monkeypatch, sub=str(member.member_id))
+        _patch_delete_cognito_user(monkeypatch, lambda access_token, *, sub: None)
+
+        response = client.delete(ENDPOINT, headers=headers)
+
+        assert response.status_code == 204
+
+    def test_status_changes_pending_to_withdrawn(
+        self, client, db_session, monkeypatch
+    ):
+        member = _create_member(db_session, status=MemberStatus.PENDING)
+        member_id = member.member_id
+        headers = _authenticate_as(monkeypatch, sub=str(member_id))
+        _patch_delete_cognito_user(monkeypatch, lambda access_token, *, sub: None)
+
+        client.delete(ENDPOINT, headers=headers)
+
+        db_session.expire_all()
+        refreshed = db_session.query(User).filter(User.member_id == member_id).one()
+        assert refreshed.status == MemberStatus.WITHDRAWN
+        assert refreshed.deleted_at is not None
+
+
 class TestWithdrawAccessControl:
     def test_missing_authorization_returns_401(self, client, db_session):
         response = client.delete(ENDPOINT)
@@ -189,6 +226,38 @@ class TestWithdrawAccessControl:
         response = client.delete(ENDPOINT, headers=headers)
 
         assert response.status_code == 404
+
+
+class TestGetPatchBlockPendingMember:
+    """
+    이메일 인증 미완료(PENDING) 회원의 일반 API 접근 차단을 API 레벨에서
+    검증한다. dependency 단위 테스트는 tests/test_current_member.py에
+    있고, 여기서는 실제 HTTP 응답 형태(403 + code)를 확인한다.
+    """
+
+    def test_get_me_returns_403_for_pending_member(
+        self, client, db_session, monkeypatch
+    ):
+        member = _create_member(db_session, status=MemberStatus.PENDING)
+        headers = _authenticate_as(monkeypatch, sub=str(member.member_id))
+
+        response = client.get("/api/v1/users/me", headers=headers)
+
+        assert response.status_code == 403
+        assert response.json()["detail"]["code"] == "EMAIL_NOT_VERIFIED"
+
+    def test_patch_me_returns_403_for_pending_member(
+        self, client, db_session, monkeypatch
+    ):
+        member = _create_member(db_session, status=MemberStatus.PENDING)
+        headers = _authenticate_as(monkeypatch, sub=str(member.member_id))
+
+        response = client.patch(
+            "/api/v1/users/me", headers=headers, json={"nickname": "newnick"}
+        )
+
+        assert response.status_code == 403
+        assert response.json()["detail"]["code"] == "EMAIL_NOT_VERIFIED"
 
 
 class TestGetPatchBlockWithdrawnMember:

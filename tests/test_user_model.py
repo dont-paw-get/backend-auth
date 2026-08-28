@@ -6,7 +6,7 @@ User 모델(테이블명 member) 테스트.
 컬럼 제약조건(NOT NULL / UNIQUE / PK / default)이 정의대로 동작하는지 검증한다.
 
 CLIAR-87: member_id(UUID)가 새 UNIQUE 식별자이며, 내부 PK는 id(BIGINT)이다.
-status는 MemberStatus ENUM(ACTIVE/WITHDRAWN)이고, nickname UNIQUE는 제거되었으며,
+status는 MemberStatus ENUM(PENDING/ACTIVE/WITHDRAWN)이고, nickname UNIQUE는 제거되었으며,
 약관 관련 컬럼(agree_terms 등)은 더 이상 이 테이블에 존재하지 않는다.
 """
 

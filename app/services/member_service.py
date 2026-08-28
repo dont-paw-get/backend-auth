@@ -256,8 +256,8 @@ def bootstrap_member(
 
 def start_withdrawal(member: User, user_repository: UserRepository) -> User:
     """
-    회원탈퇴 1단계: member.status를 ACTIVE -> WITHDRAWN으로 변경하고
-    즉시 commit한다.
+    회원탈퇴 1단계: member.status를 WITHDRAWN으로 변경하고 즉시
+    commit한다.
 
     CLIAR-113 탈퇴 처리 순서:
       1. status=WITHDRAWN으로 변경 + commit (이 함수)
@@ -275,8 +275,12 @@ def start_withdrawal(member: User, user_repository: UserRepository) -> User:
 
     이미 WITHDRAWN인 member(재시도 케이스, deleted_at 여부 무관)에
     대해서는 이 함수를 호출하지 않고 호출자가 그대로 다음 단계로
-    진행해야 한다. 이 함수는 status가 ACTIVE인 경우에만 호출된다는
-    전제 하에 동작한다.
+    진행해야 한다. 즉 이 함수는 status가 WITHDRAWN이 아닌 경우에만
+    호출된다는 전제 하에 동작한다.
+
+    출발 상태는 ACTIVE일 수도 PENDING(이메일 인증 대기)일 수도 있다.
+    어느 쪽이든 WITHDRAWN으로 가는 전이는 동일하며, 이메일 인증을
+    끝내지 않은 회원도 탈퇴할 수 있어야 한다.
     """
     try:
         user_repository.mark_withdrawn(member)
