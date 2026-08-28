@@ -1,11 +1,16 @@
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.repositories.user_repository import UserRepository
-from app.schemas.auth import AvailabilityRequest, AvailabilityResponse
-from app.services.auth_service import check_availability
+from app.schemas.auth import (
+    AvailabilityRequest,
+    AvailabilityResponse,
+    RefreshTokenRequest,
+    RefreshTokenResponse,
+)
+from app.services.auth_service import check_availability, refresh_access_token
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
@@ -30,3 +35,28 @@ def check_availability_endpoint(
 
     user_repository = UserRepository(db)
     return check_availability(request.field, request.value, user_repository)
+
+
+@router.post("/refresh", response_model=RefreshTokenResponse)
+def refresh_token_endpoint(payload: RefreshTokenRequest):
+    """
+    Cognito Refresh Token으로 새 Access Token을 재발급한다 (CLIAR-125).
+
+    Access Token이 만료됐을 때 사용하는 API이므로, 이 endpoint는
+    Bearer Access Token 인증을 요구하지 않는다(users 라우터와 달리
+    bearer_scheme 의존성을 두지 않음). client가 보낸 refresh_token의
+    유효성 자체는 Cognito가 판단하며, 이 코드는 그 결과를 그대로
+    신뢰하고 재검증(JWT 서명 등)을 시도하지 않는다.
+    """
+    try:
+        return refresh_access_token(payload.refresh_token)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Cognito rejected the refresh token",
+        )
+    except RuntimeError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not refresh the access token",
+        )

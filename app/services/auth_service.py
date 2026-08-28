@@ -1,5 +1,6 @@
+from app.core.cognito import refresh_cognito_access_token
 from app.repositories.user_repository import UserRepository
-from app.schemas.auth import AvailabilityField, AvailabilityResponse
+from app.schemas.auth import AvailabilityField, AvailabilityResponse, RefreshTokenResponse
 
 
 class UnsupportedAvailabilityFieldError(ValueError):
@@ -27,3 +28,23 @@ def check_availability(
         raise UnsupportedAvailabilityFieldError(f"Unsupported field: {field}")
 
     return AvailabilityResponse(field=field, available=not exists)
+
+
+def refresh_access_token(refresh_token: str) -> RefreshTokenResponse:
+    """
+    Cognito Refresh Token으로 새 Access Token을 재발급받는다
+    (CLIAR-125).
+
+    실제 Cognito 호출은 app.core.cognito.refresh_cognito_access_token이
+    담당하며, 이 함수는 그 결과를 API 응답 schema로 변환하는 역할만
+    한다. ValueError(잘못된/만료된 refresh token)와 RuntimeError
+    (Cognito 호출 실패)는 그대로 호출자(router)에게 전달되어 각각
+    401/502로 매핑된다.
+    """
+    auth_result = refresh_cognito_access_token(refresh_token)
+
+    return RefreshTokenResponse(
+        access_token=auth_result["AccessToken"],
+        expires_in=auth_result["ExpiresIn"],
+        id_token=auth_result.get("IdToken"),
+    )
