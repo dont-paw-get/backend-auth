@@ -25,7 +25,7 @@ from fastapi.testclient import TestClient
 from app.core import cognito_auth
 from app.core.cognito_auth import secret_hash
 from app.core.config import settings
-from app.core.security import get_current_access_token
+from app.core.security import get_current_access_token, get_current_user_id
 from app.main import app
 
 FORGOT_ENDPOINT = "/api/v1/auth/password/forgot"
@@ -472,8 +472,16 @@ def _change_body(**overrides):
     return body
 
 
-def _authorized(client, access_token="issued-access-token"):
+def _authorized(client, access_token="issued-access-token", sub="test-member-sub"):
+    """
+    /password/change는 access_token(Cognito 호출용)과 별개로
+    get_current_user_id(감사 로그 member_id 용, CLIAR-160)도
+    Depends()하므로 두 dependency를 함께 override해야 한다 —
+    두 함수는 같은 _extract_and_verify_bearer_token을 공유하지만
+    override 시에는 각각 독립적으로 대체해야 한다.
+    """
     app.dependency_overrides[get_current_access_token] = lambda: access_token
+    app.dependency_overrides[get_current_user_id] = lambda: sub
 
 
 class TestPasswordChangeSuccess:

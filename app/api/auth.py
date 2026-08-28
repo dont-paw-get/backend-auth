@@ -5,7 +5,9 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
+from app.core.audit_log import audit
 from app.core.cognito_errors import CognitoApiError
+from app.core.config import settings
 from app.core.cookies import (
     REFRESH_SUB_COOKIE_NAME,
     REFRESH_TOKEN_COOKIE_NAME,
@@ -13,7 +15,12 @@ from app.core.cookies import (
     set_refresh_cookies,
 )
 from app.core.database import get_db
-from app.core.security import bearer_scheme, get_current_access_token
+from app.core.rate_limit import rate_limit
+from app.core.security import (
+    bearer_scheme,
+    get_current_access_token,
+    get_current_user_id,
+)
 from app.repositories.member_agreement_repository import MemberAgreementRepository
 from app.repositories.terms_repository import TermsRepository
 from app.repositories.user_repository import UserRepository
@@ -114,7 +121,11 @@ def _unauthorized_clearing_refresh_cookies(detail: str) -> JSONResponse:
     return response
 
 
-@router.post("/login", response_model=LoginResponse)
+@router.post(
+    "/login",
+    response_model=LoginResponse,
+    dependencies=[Depends(rate_limit("login", settings.RATE_LIMIT_LOGIN))],
+)
 def login_endpoint(
     payload: LoginRequest,
     response: Response,
@@ -144,6 +155,7 @@ def login_endpoint(
             user_repository=user_repository,
         )
     except MemberEmailNotVerifiedError:
+        audit("login", outcome="failure", reason="email_not_verified")
         # detail을 dict로 내려 FE가 "이메일 인증 미완료"를 기계적으로
         # 구분할 수 있게 한다(app/api/deps.py의 get_current_member,
         # cognito_errors의 UserNotConfirmedException 매핑과 동일한 형태).
@@ -152,10 +164,13 @@ def login_endpoint(
             detail=EMAIL_NOT_VERIFIED_DETAIL,
         )
     except MemberWithdrawnError as e:
+        audit("login", outcome="failure", reason="withdrawn")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
     except MemberNotFoundError as e:
+        audit("login", outcome="failure", reason="member_not_found")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except InvalidCognitoIdentityError:
+        audit("login", outcome="failure", reason="invalid_cognito_identity")
         # 사용자 입력 문제가 아니라 Cognito/서버 구성 문제다. Cognito
         # 원문을 노출하지 않는 일반 메시지로 응답한다.
         raise HTTPException(
@@ -163,7 +178,10 @@ def login_endpoint(
             detail="Authenticated identity is not a valid UUID",
         )
     except CognitoApiError as e:
+        audit("login", outcome="failure", reason=f"cognito_error_{e.status_code}")
         raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+    audit("login", outcome="success", member_id=result.sub)
 
     if result.refresh_token:
         set_refresh_cookies(
@@ -298,7 +316,17 @@ def logout_endpoint(
     경로로도 로그에 남기지 않는다.
     """
     if refresh_token_cookie:
-        log_out(refresh_token=refresh_token_cookie)
+        revoked = log_out(refresh_token=refresh_token_cookie)
+        # HTTP 응답은 revoke 성공 여부와 무관하게 항상 204이지만(위
+        # docstring 참고), 감사 로그는 Cognito 측에서 실제로
+        # 무효화됐는지를 별도로 남긴다 — 반복적인 revoke 실패는 보안
+        # 관점에서 조사할 가치가 있는 신호이기 때문이다.
+        audit(
+            "logout",
+            outcome="success" if revoked else "revoke_failed",
+        )
+    else:
+        audit("logout", outcome="success", reason="no_session_cookie")
 
     clear_refresh_cookies(response)
     return None
@@ -308,6 +336,7 @@ def logout_endpoint(
     "/signup",
     response_model=SignupResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit("signup", settings.RATE_LIMIT_SIGNUP))],
 )
 def signup_endpoint(
     payload: SignupRequest,
@@ -348,10 +377,13 @@ def signup_endpoint(
             member_agreement_repository,
         )
     except EmailAlreadyRegisteredError as e:
+        audit("signup", outcome="failure", reason="email_already_registered")
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except (InvalidNicknameError, RequiredConsentNotAgreedError) as e:
+        audit("signup", outcome="failure", reason="validation_error")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except RequiredTermsNotConfiguredError as e:
+        audit("signup", outcome="failure", reason="terms_not_configured")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e)
         )
@@ -362,11 +394,15 @@ def signup_endpoint(
                 "also failed; a possible orphan Cognito account remains "
                 "for email hash unavailable here (see service logs)"
             )
+        audit("signup", outcome="failure", reason="persistence_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
         )
     except CognitoApiError as e:
+        audit("signup", outcome="failure", reason=f"cognito_error_{e.status_code}")
         raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+    audit("signup", outcome="success", member_id=str(member.member_id))
 
     return SignupResponse(
         member_id=member.member_id,
@@ -399,13 +435,22 @@ def signup_confirm_endpoint(
             user_repository=user_repository,
         )
     except MemberNotFoundForConfirmError as e:
+        audit("signup_confirm", outcome="failure", reason="member_not_found")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except ConfirmPersistenceError as e:
+        audit("signup_confirm", outcome="failure", reason="persistence_error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
         )
     except CognitoApiError as e:
+        audit(
+            "signup_confirm",
+            outcome="failure",
+            reason=f"cognito_error_{e.status_code}",
+        )
         raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+    audit("signup_confirm", outcome="success", member_id=str(member.member_id))
 
     return SignupConfirmResponse(
         member_id=member.member_id,
@@ -414,7 +459,11 @@ def signup_confirm_endpoint(
     )
 
 
-@router.post("/signup/resend", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/signup/resend",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(rate_limit("signup_resend", settings.RATE_LIMIT_SIGNUP))],
+)
 def signup_resend_endpoint(payload: SignupResendRequest):
     """
     Cognito ResendConfirmationCode 재호출 (CLIAR-151, PLAN.md §5).
@@ -431,7 +480,11 @@ def signup_resend_endpoint(payload: SignupResendRequest):
     return None
 
 
-@router.post("/password/forgot", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/password/forgot",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(rate_limit("password_forgot", settings.RATE_LIMIT_PASSWORD))],
+)
 def password_forgot_endpoint(payload: PasswordForgotRequest):
     """
     비밀번호 재설정 코드를 이메일로 발송한다 (CLIAR-157, PLAN.md
@@ -449,12 +502,23 @@ def password_forgot_endpoint(payload: PasswordForgotRequest):
     try:
         forgot_password(email=payload.email)
     except CognitoApiError as e:
+        audit(
+            "password_forgot",
+            outcome="failure",
+            reason=f"cognito_error_{e.status_code}",
+        )
         raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+    audit("password_forgot", outcome="success")
 
     return None
 
 
-@router.post("/password/reset", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/password/reset",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(rate_limit("password_reset", settings.RATE_LIMIT_PASSWORD))],
+)
 def password_reset_endpoint(payload: PasswordResetRequest):
     """
     인증 코드로 비밀번호를 재설정한다 (CLIAR-157, PLAN.md §4.4).
@@ -471,7 +535,14 @@ def password_reset_endpoint(payload: PasswordResetRequest):
             new_password=payload.new_password.get_secret_value(),
         )
     except CognitoApiError as e:
+        audit(
+            "password_reset",
+            outcome="failure",
+            reason=f"cognito_error_{e.status_code}",
+        )
         raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+    audit("password_reset", outcome="success")
 
     return None
 
@@ -484,6 +555,7 @@ def password_reset_endpoint(payload: PasswordResetRequest):
 def password_change_endpoint(
     payload: PasswordChangeRequest,
     access_token: str = Depends(get_current_access_token),
+    user_id: str = Depends(get_current_user_id),
 ):
     """
     로그인 상태에서 비밀번호를 변경한다 (CLIAR-157, PLAN.md §4.4).
@@ -493,6 +565,12 @@ def password_change_endpoint(
     request body는 current_password/new_password만 받는다 —
     client가 member_id/sub/email 등을 보내 인증 대상을 스스로
     결정하게 하지 않는다.
+
+    get_current_user_id도 함께 Depends()하는 것은 감사 로그에 남길
+    member_id(sub)만을 위해서다. 두 dependency 모두 동일한
+    _extract_and_verify_bearer_token을 공유하므로(app/core/
+    security.py), 같은 요청 안에서 실제 토큰 검증은 한 번만
+    실행된다(추가 Cognito 호출 없음).
     """
     try:
         change_password(
@@ -501,6 +579,14 @@ def password_change_endpoint(
             new_password=payload.new_password.get_secret_value(),
         )
     except CognitoApiError as e:
+        audit(
+            "password_change",
+            outcome="failure",
+            member_id=user_id,
+            reason=f"cognito_error_{e.status_code}",
+        )
         raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+    audit("password_change", outcome="success", member_id=user_id)
 
     return None
