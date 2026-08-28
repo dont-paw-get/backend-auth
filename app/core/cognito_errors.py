@@ -102,3 +102,34 @@ def map_cognito_error_code(error_code: str) -> ErrorResponse:
 def map_connection_error() -> ErrorResponse:
     """네트워크 자체가 실패한 경우(EndpointConnectionError 등)의 응답."""
     return CONNECTION_ERROR
+
+
+class CognitoApiError(Exception):
+    """
+    Cognito boto3 ClientError/EndpointConnectionError를 이미
+    map_cognito_error_code()/map_connection_error()로 변환한 (status,
+    detail)을 담아 상위 계층(API router)에 전달하기 위한 wrapper
+    (CLIAR-151, Phase 3).
+
+    service 계층(예: signup_service.py)이 이 예외를 던지면, router는
+    e.status_code/e.detail을 그대로 HTTPException에 옮기기만 하면
+    되므로, 여러 endpoint/service가 각자 error_code를 if/elif로
+    분기하는 중복을 피할 수 있다.
+    """
+
+    def __init__(self, status_code: int, detail: str | dict):
+        self.status_code = status_code
+        self.detail = detail
+        super().__init__(detail if isinstance(detail, str) else str(detail))
+
+
+def cognito_client_error_to_exception(error_code: str) -> CognitoApiError:
+    """boto3 ClientError의 error_code를 CognitoApiError로 변환한다."""
+    status_code, detail = map_cognito_error_code(error_code)
+    return CognitoApiError(status_code, detail)
+
+
+def connection_error_to_exception() -> CognitoApiError:
+    """EndpointConnectionError 등 네트워크 실패를 CognitoApiError로 변환한다."""
+    status_code, detail = map_connection_error()
+    return CognitoApiError(status_code, detail)

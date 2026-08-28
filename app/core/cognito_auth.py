@@ -55,3 +55,147 @@ def secret_hash(username: str) -> str:
     digest = hmac.new(key, message, hashlib.sha256).digest()
 
     return base64.b64encode(digest).decode("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 (CLIAR-151): 회원가입 wrapper.
+#
+# 이 함수들은 boto3 예외(ClientError/EndpointConnectionError)를 스스로
+# 잡지 않고 그대로 호출자에게 전파한다. 매핑 로직은 오직
+# app/services/signup_service.py에서 app/core/cognito_errors.py를 통해
+# 한 곳에서만 결정한다(endpoint/service마다 매핑을 중복 작성하지
+# 않기 위함). 이는 기존 app/core/cognito.py의 wrapper들(각자 ClientError를
+# 잡아 ValueError/RuntimeError로 변환하는 방식)과는 다른 패턴인데,
+# cognito_errors.py가 아직 없던 시점에 작성된 코드이기 때문이다.
+#
+# Username은 email을 그대로 사용한다. 이는 Cognito User Pool이 email을
+# 로그인 식별자(alias 또는 실제 username)로 허용하도록 구성되어 있다는
+# 전제이며(PLAN.md §8.1 "email alias가 활성화되어 있어야 한다(미설정 시
+# 추가)"), 이 전제가 실제로 충족되는지는 IAM/User Pool 설정이 아직
+# 완료되지 않아 코드만으로 확정할 수 없다(완료 보고 참고).
+# ---------------------------------------------------------------------------
+
+
+def _require_backend_client_id() -> str:
+    """
+    secret_hash()가 이미 COGNITO_BACKEND_CLIENT_ID/SECRET의 존재를
+    검증하므로, 이 함수는 secret_hash() 호출 이후에만 사용해 중복
+    검증 없이 값을 꺼낸다.
+    """
+    return settings.COGNITO_BACKEND_CLIENT_ID  # type: ignore[return-value]
+
+
+def sign_up(*, email: str, password: str) -> dict:
+    """
+    신규 backend 전용 App Client로 Cognito SignUp을 호출한다.
+
+    ClientError(예: UsernameExistsException, InvalidPasswordException)와
+    EndpointConnectionError는 이 함수가 잡지 않고 그대로 전파한다.
+    호출자(app/services/signup_service.py)가 UsernameExistsException을
+    특별히 분기(orphan recovery)하고, 그 외에는 cognito_errors.py의
+    매핑을 적용한다.
+
+    반환값은 boto3 sign_up() 응답 원본이다(UserSub, CodeDeliveryDetails
+    등 포함).
+    """
+    hash_value = secret_hash(email)
+    client = get_cognito_idp_client()
+    return client.sign_up(
+        ClientId=_require_backend_client_id(),
+        SecretHash=hash_value,
+        Username=email,
+        Password=password,
+        UserAttributes=[{"Name": "email", "Value": email}],
+    )
+
+
+def confirm_sign_up(*, email: str, confirmation_code: str) -> None:
+    """
+    Cognito ConfirmSignUp을 호출해 이메일 인증 코드를 검증한다.
+
+    ClientError(예: CodeMismatchException, ExpiredCodeException)는
+    잡지 않고 그대로 전파한다.
+    """
+    hash_value = secret_hash(email)
+    client = get_cognito_idp_client()
+    client.confirm_sign_up(
+        ClientId=_require_backend_client_id(),
+        SecretHash=hash_value,
+        Username=email,
+        ConfirmationCode=confirmation_code,
+    )
+
+
+def resend_confirmation_code(*, email: str) -> dict:
+    """
+    Cognito ResendConfirmationCode를 호출해 인증 코드를 재전송한다.
+
+    반환값은 boto3 resend_confirmation_code() 응답 원본이다
+    (CodeDeliveryDetails 포함).
+    """
+    hash_value = secret_hash(email)
+    client = get_cognito_idp_client()
+    return client.resend_confirmation_code(
+        ClientId=_require_backend_client_id(),
+        SecretHash=hash_value,
+        Username=email,
+    )
+
+
+def admin_get_user(*, email: str) -> dict:
+    """
+    AdminGetUser로 Cognito 사용자 정보(sub 포함)를 조회한다.
+
+    UsernameExistsException 발생 시 "이 이메일이 이미 가입된 것인지,
+    DB에는 없는 고아 Cognito 계정인지"를 판별하기 위한 orphan recovery
+    (PLAN.md §4.1) 전용이다.
+
+    주의: cognito-idp:AdminGetUser IAM 권한이 필요하다. CLIAR-151
+    시점에는 이 권한이 아직 워크로드에 연결되지 않았으므로(완료 보고
+    참고), 실제 환경에서는 AccessDeniedException 등으로 실패할 수
+    있다. 이 함수는 admin API이므로 SecretHash를 보내지 않는다(IAM
+    자격증명으로 인가되며 App Client secret과는 무관하다).
+    """
+    client = get_cognito_idp_client()
+    return client.admin_get_user(
+        UserPoolId=settings.COGNITO_USER_POOL_ID,
+        Username=email,
+    )
+
+
+def admin_delete_user(*, email: str) -> None:
+    """
+    AdminDeleteUser로 Cognito 사용자를 강제 삭제한다.
+
+    Cognito SignUp은 성공했지만 뒤이은 DB(member/member_agreement)
+    저장이 실패했을 때, 고아 Cognito 계정을 남기지 않기 위한 보상
+    삭제 전용이다(PLAN.md §4.1 "③ 실패 시 보상").
+
+    주의: cognito-idp:AdminDeleteUser IAM 권한이 필요하다. CLIAR-151
+    시점에는 이 권한이 아직 워크로드에 연결되지 않았으므로(완료 보고
+    참고), 실제 환경에서는 이 호출 자체가 실패할 수 있다. 호출자는
+    이 실패를 원래 signup 실패를 성공으로 위장하는 데 쓰지 않아야
+    한다.
+    """
+    client = get_cognito_idp_client()
+    client.admin_delete_user(
+        UserPoolId=settings.COGNITO_USER_POOL_ID,
+        Username=email,
+    )
+
+
+def extract_sub_from_admin_get_user(response: dict) -> str:
+    """
+    AdminGetUser 응답의 UserAttributes 목록에서 sub 값을 추출한다.
+
+    app.core.cognito.get_cognito_user_email이 GetUser 응답에서 email
+    속성을 찾는 것과 동일한 패턴이다. sub 속성이 없으면(비정상 응답)
+    ValueError를 던진다.
+    """
+    for attribute in response.get("UserAttributes", []):
+        if attribute.get("Name") == "sub":
+            value = attribute.get("Value")
+            if value:
+                return value
+
+    raise ValueError("AdminGetUser response is missing the 'sub' attribute")
