@@ -23,8 +23,30 @@ class UserRepository:
         stmt = select(User).where(User.member_id == user_id).limit(1)
         return self.db.execute(stmt).scalar_one_or_none()
 
+    def get_by_email(self, email: str) -> User | None:
+        """
+        정규화된 email로 MEMBER를 조회한다.
+
+        email은 UNIQUE 컬럼이므로 결과는 최대 1건이다. 호출자는
+        auth_service._normalize_email과 동일하게 strip + lower를 적용한
+        값을 넘겨야 한다(이 메서드는 정규화를 수행하지 않는다).
+
+        status로 필터링하지 않는다. PENDING/WITHDRAWN 회원도 그대로
+        반환하며, 상태에 따른 판단은 호출자(service)의 책임이다.
+        """
+        stmt = select(User).where(User.email == email).limit(1)
+        return self.db.execute(stmt).scalar_one_or_none()
+
     def exists_by_email(self, email: str) -> bool:
-        """주어진 이메일(정규화된 값)이 이미 존재하는지 확인한다."""
+        """
+        주어진 이메일(정규화된 값)이 이미 존재하는지 확인한다.
+
+        status로 필터링하지 않는 것은 의도적이다. PENDING(이메일 인증
+        대기) 회원의 이메일도 Cognito User Pool에서 이미 점유된
+        상태이므로, 같은 이메일로의 신규 가입은 어차피
+        UsernameExistsException으로 실패한다. 따라서 중복 확인
+        단계에서 "사용 중"으로 계산해야 일관된 응답이 된다.
+        """
         stmt = select(User.member_id).where(User.email == email).limit(1)
         return self.db.execute(stmt).first() is not None
 

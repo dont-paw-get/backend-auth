@@ -248,8 +248,10 @@ def withdraw_current_member(
     user_repository = UserRepository(db)
 
     if member.status != MemberStatus.WITHDRAWN:
-        # 케이스: 최초 탈퇴 요청(ACTIVE -> WITHDRAWN, deleted_at은
-        # 아직 NULL). 이 시점부터 일반 API 접근이 차단된다.
+        # 케이스: 최초 탈퇴 요청(ACTIVE 또는 PENDING -> WITHDRAWN,
+        # deleted_at은 아직 NULL). 이 시점부터 일반 API 접근이
+        # 차단된다. 이메일 인증을 끝내지 않은 PENDING 회원도 탈퇴할 수
+        # 있어야 하므로 ACTIVE로 한정하지 않는다.
         try:
             start_withdrawal(member, user_repository)
         except MemberWithdrawalPersistenceError:

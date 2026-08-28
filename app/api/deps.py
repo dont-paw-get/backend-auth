@@ -9,9 +9,13 @@ FastAPI dependency로 조합된 "현재 인증 사용자" 조회 기반.
         -> MEMBER가 없으면 404, sub가 UUID가 아니면 401
         -> status/deleted_at은 검사하지 않는다
     get_current_member (여기)
-        -> _get_member_by_sub 조회 결과에 더해, WITHDRAWN 처리된
-           (status=WITHDRAWN 또는 deleted_at이 설정된) 회원의 일반 API
-           접근을 403으로 차단한다. GET/PATCH /users/me가 사용한다.
+        -> _get_member_by_sub 조회 결과에 더해, 아직 사용할 수 없는
+           회원의 일반 API 접근을 403으로 차단한다.
+           GET/PATCH /users/me가 사용한다.
+           - WITHDRAWN 처리됨(status=WITHDRAWN 또는 deleted_at 설정)
+             -> 403, detail은 문자열(기존 계약 유지)
+           - 이메일 인증 미완료(status=PENDING)
+             -> 403, detail은 {"code": "EMAIL_NOT_VERIFIED", ...}
     get_member_by_sub (여기)
         -> _get_member_by_sub와 동일하게 status 검사 없이 조회만
            수행하는 FastAPI dependency. CLIAR-113 회원탈퇴
@@ -83,11 +87,35 @@ def get_current_member(
     계정이므로 403으로 차단한다.
     """
     member = _lookup_member_by_sub(user_id, db)
+
+    # 탈퇴 검사를 먼저 한다. 탈퇴는 종착 상태이므로, 어떤 이유로든
+    # status가 PENDING인 채로 deleted_at이 찍힌 row가 있더라도
+    # "이메일 인증 필요"가 아니라 "탈퇴한 계정"으로 응답해야 한다.
     if member.status == MemberStatus.WITHDRAWN or member.deleted_at is not None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="This member has been withdrawn",
         )
+
+    # PENDING = Cognito SignUp은 됐지만 이메일 인증이 끝나지 않은 상태.
+    # 정상 경로에서는 Cognito가 미확인 계정의 InitiateAuth를 거부하므로
+    # 여기까지 오지 않는다. 다만 ConfirmSignUp은 성공했는데 뒤이은 DB
+    # UPDATE가 실패해 Cognito=CONFIRMED / DB=PENDING으로 어긋난 경우
+    # 유효한 access token을 가진 PENDING 회원이 존재할 수 있다.
+    #
+    # detail을 문자열이 아니라 code를 담은 dict로 반환하는 이유: FE가
+    # "탈퇴한 계정"(재가입 안내)과 "이메일 인증 미완료"(인증 코드 입력
+    # 화면으로 이동)를 구분해서 라우팅해야 하기 때문이다. 기존
+    # WITHDRAWN 응답은 API 계약을 깨지 않도록 문자열 그대로 둔다.
+    if member.status == MemberStatus.PENDING:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "EMAIL_NOT_VERIFIED",
+                "message": "Email verification has not been completed",
+            },
+        )
+
     return member
 
 

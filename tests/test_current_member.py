@@ -49,12 +49,12 @@ def db_session(engine):
     session.close()
 
 
-def _make_member(db_session, member_id):
+def _make_member(db_session, member_id, *, status=MemberStatus.ACTIVE):
     member = User(
         member_id=member_id,
         email="member@example.com",
         nickname="membernick",
-        status=MemberStatus.ACTIVE,
+        status=status,
     )
     db_session.add(member)
     db_session.commit()
@@ -101,6 +101,57 @@ class TestGetCurrentMember:
             get_current_member(user_id="not-a-uuid", db=db_session)
 
         assert exc_info.value.status_code == 401
+
+    def test_raises_403_when_member_is_pending(self, db_session):
+        """
+        PENDING = Cognito SignUp은 됐지만 이메일 인증(ConfirmSignUp)이
+        끝나지 않은 상태. 유효한 access token을 들고 왔더라도 일반 API
+        접근은 403으로 차단해야 한다.
+
+        정상 경로에서는 Cognito가 미확인 계정의 InitiateAuth를 거부하므로
+        PENDING 회원은 토큰을 얻을 수 없다. 다만 ConfirmSignUp 성공 후
+        DB UPDATE가 실패해 Cognito=CONFIRMED / DB=PENDING으로 어긋난
+        경우가 있을 수 있어 이 방어가 필요하다.
+        """
+        member_id = uuid.uuid4()
+        _make_member(db_session, member_id, status=MemberStatus.PENDING)
+
+        with pytest.raises(HTTPException) as exc_info:
+            get_current_member(user_id=str(member_id), db=db_session)
+
+        assert exc_info.value.status_code == 403
+
+    def test_pending_403_carries_email_not_verified_code(self, db_session):
+        """
+        FE가 "탈퇴한 계정"과 "이메일 인증 미완료"를 구분해서 라우팅할 수
+        있어야 하므로, PENDING의 403은 기계가 읽을 수 있는 code를
+        포함해야 한다.
+        """
+        member_id = uuid.uuid4()
+        _make_member(db_session, member_id, status=MemberStatus.PENDING)
+
+        with pytest.raises(HTTPException) as exc_info:
+            get_current_member(user_id=str(member_id), db=db_session)
+
+        assert exc_info.value.detail["code"] == "EMAIL_NOT_VERIFIED"
+
+    def test_withdrawn_takes_precedence_over_pending(self, db_session):
+        """
+        탈퇴는 종착 상태다. deleted_at이 찍힌 PENDING row가 존재하더라도
+        "이메일 인증 필요"가 아니라 "탈퇴한 계정"으로 응답해야 한다.
+        """
+        from datetime import datetime, timezone
+
+        member_id = uuid.uuid4()
+        member = _make_member(db_session, member_id, status=MemberStatus.PENDING)
+        member.deleted_at = datetime.now(timezone.utc)
+        db_session.commit()
+
+        with pytest.raises(HTTPException) as exc_info:
+            get_current_member(user_id=str(member_id), db=db_session)
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "This member has been withdrawn"
 
     def test_dependency_can_be_overridden_in_fastapi_app(self, db_session):
         """

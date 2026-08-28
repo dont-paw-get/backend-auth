@@ -9,8 +9,23 @@ from app.core.database import Base
 
 
 class MemberStatus(str, enum.Enum):
-    """member.status 컬럼에 대응하는 PostgreSQL ENUM(member_status)."""
+    """
+    member.status 컬럼에 대응하는 PostgreSQL ENUM(member_status).
 
+    PENDING: Cognito SignUp은 완료되어 member row가 생성되었지만, 아직
+        이메일 인증(ConfirmSignUp)이 끝나지 않은 상태. BE 주도 인증
+        전환에서 POST /auth/signup이 이 상태로 member를 생성하고,
+        POST /auth/signup/confirm이 ACTIVE로 전이시킨다.
+
+        PENDING인 회원은 Cognito가 InitiateAuth를 거부하므로(계정
+        미확인) 정상 경로에서는 access token 자체를 얻을 수 없다.
+        다만 ConfirmSignUp은 성공했는데 뒤이은 DB UPDATE가 실패한
+        경우(Cognito=CONFIRMED, DB=PENDING) 토큰을 가진 PENDING
+        회원이 존재할 수 있으므로, get_current_member는 이 상태를
+        명시적으로 차단한다(app/api/deps.py 참고).
+    """
+
+    PENDING = "PENDING"
     ACTIVE = "ACTIVE"
     WITHDRAWN = "WITHDRAWN"
 
