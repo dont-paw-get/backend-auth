@@ -36,13 +36,38 @@ class Settings(BaseSettings):
     COGNITO_BACKEND_CLIENT_ID: str | None = None
     COGNITO_BACKEND_CLIENT_SECRET: str | None = None
 
-    # CLIAR-148: Phase 4(로그인/쿠키)에서 실제로 쓰일 설정값. 이번
-    # 티켓에서는 CORS 미들웨어나 쿠키 발급 endpoint에 연결하지 않으므로
-    # 합리적인 기본값만 둔다.
+    # CLIAR-148: Phase 4(로그인/쿠키)에서 실제로 쓰일 설정값.
+    # CLIAR-153에서 CORS 미들웨어(app/main.py)와 refresh 쿠키
+    # (app/core/cookies.py)에 실제로 연결되었다.
+    #
+    # CORS_ALLOWED_ORIGINS: 쉼표로 구분된 origin 목록. 기본값이 빈
+    # 문자열인 것은 의도적이다. 아직 이 환경변수가 주입되지 않은
+    # dev/prod configmap에서도 startup이 깨지지 않아야 하기 때문이다
+    # (required로 두면 Settings() 생성 자체가 실패한다). 값이 비어
+    # 있으면 어떤 cross-origin 요청도 허용되지 않으며, 이는 CORS
+    # 미들웨어가 아예 없던 기존 동작과 동일하다. 실제 FE origin은
+    # 코드에 하드코딩하지 않고 환경별 configmap에서 주입한다.
     CORS_ALLOWED_ORIGINS: str = ""
     COOKIE_SECURE: bool = True
     COOKIE_SAMESITE: str = "lax"
     COOKIE_DOMAIN: str | None = None
+
+    @property
+    def cors_allowed_origins_list(self) -> list[str]:
+        """
+        CORS_ALLOWED_ORIGINS(CSV)를 origin 목록으로 파싱한다.
+
+        와일드카드("*")는 명시적으로 제외한다. 브라우저는
+        allow_credentials=True와 allow_origins=["*"] 조합을 허용하지
+        않으므로(refresh 쿠키 전송이 불가능해진다), 설정에 "*"가
+        들어오더라도 조용히 그 조합이 만들어지지 않게 한다.
+        """
+        origins = [
+            origin.strip()
+            for origin in self.CORS_ALLOWED_ORIGINS.split(",")
+            if origin.strip()
+        ]
+        return [origin for origin in origins if origin != "*"]
 
 
 settings = Settings()
