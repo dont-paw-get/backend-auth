@@ -219,3 +219,68 @@ def delete_cognito_user(access_token: str, *, sub: str) -> None:
     except EndpointConnectionError as e:
         logger.error("Cognito DeleteUser: could not reach Cognito (sub=%s)", sub)
         raise RuntimeError("Could not reach Cognito") from e
+
+
+def refresh_cognito_access_token(refresh_token: str) -> dict:
+    """
+    Cognito Refresh Token으로 새 Access Token을 발급받는다
+    (CLIAR-125, POST /api/v1/auth/refresh).
+
+    boto3 cognito-idp.initiate_auth(AuthFlow="REFRESH_TOKEN_AUTH", ...)를
+    호출한다. ClientId는 항상 settings.COGNITO_CLIENT_ID를 사용하며
+    하드코딩하지 않는다. 현재 App Client는 Client Secret이 없으므로
+    SECRET_HASH는 보내지 않는다.
+
+    Refresh Token Rotation이 비활성화되어 있으므로 Cognito 응답에도
+    새 Refresh Token이 포함되지 않는다. 이 함수는 그 값을 만들어내거나
+    가공하지 않고 Cognito의 AuthenticationResult를 그대로 반환한다.
+
+    Refresh Token 자체의 서명/만료 등 유효성 검증은 이 함수가 직접
+    수행하지 않고 Cognito에 위임한다.
+
+    예외 분류:
+    - NotAuthorizedException 등(Cognito가 refresh token을 만료/무효로
+      판단): ValueError -> 호출자가 401로 매핑
+    - 그 외 ClientError/네트워크 장애: RuntimeError -> 호출자가 502로
+      매핑
+
+    로그에는 성공/실패 여부와 Cognito error code만 남기고 refresh
+    token/access token 값은 절대 기록하지 않는다.
+    """
+    from botocore.exceptions import ClientError, EndpointConnectionError
+
+    client = get_cognito_idp_client()
+
+    try:
+        response = client.initiate_auth(
+            AuthFlow="REFRESH_TOKEN_AUTH",
+            AuthParameters={"REFRESH_TOKEN": refresh_token},
+            ClientId=settings.COGNITO_CLIENT_ID,
+        )
+    except ClientError as e:
+        error_code = e.response.get("Error", {}).get("Code", "")
+
+        if error_code in {
+            "NotAuthorizedException",
+            "UserNotFoundException",
+            "InvalidParameterException",
+        }:
+            logger.info(
+                "Cognito RefreshToken rejected: error_code=%s", error_code
+            )
+            raise ValueError("Cognito rejected the refresh token") from e
+
+        logger.error(
+            "Cognito RefreshToken call failed: error_code=%s", error_code
+        )
+        raise RuntimeError("Cognito RefreshToken call failed") from e
+    except EndpointConnectionError as e:
+        logger.error("Cognito RefreshToken: could not reach Cognito")
+        raise RuntimeError("Could not reach Cognito") from e
+
+    auth_result = response.get("AuthenticationResult") or {}
+    if "AccessToken" not in auth_result:
+        logger.error("Cognito RefreshToken response did not include an access token")
+        raise RuntimeError("Cognito response did not include an access token")
+
+    return auth_result
