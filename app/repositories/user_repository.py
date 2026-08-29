@@ -55,27 +55,6 @@ class UserRepository:
         stmt = select(User.member_id).where(User.nickname == nickname).limit(1)
         return self.db.execute(stmt).first() is not None
 
-    def exists_by_nickname_excluding_user_id(
-        self, nickname: str, exclude_user_id: uuid.UUID
-    ) -> bool:
-        """
-        본인(exclude_user_id, member_id)을 제외한 다른 MEMBER가 이미
-        해당 닉네임을 사용 중인지 확인한다. 프로필 수정 시 "본인의
-        기존 닉네임을 그대로 다시 보내는 경우"를 중복으로 오판하지
-        않기 위해 사용한다.
-
-        CLIAR-87에서 nickname UNIQUE 제약이 제거되었으므로, 이 메서드는
-        더 이상 DB 제약 위반을 막기 위한 목적이 아니다. 다만 기존
-        API 계약(PATCH /users/me에서 타인의 닉네임 재사용 시 409)을
-        그대로 유지하기 위해 애플리케이션 레벨 검사로 존속시킨다.
-        """
-        stmt = (
-            select(User.member_id)
-            .where(User.nickname == nickname, User.member_id != exclude_user_id)
-            .limit(1)
-        )
-        return self.db.execute(stmt).first() is not None
-
     def create(self, member: User) -> User:
         """
         새 MEMBER row를 생성한다.
