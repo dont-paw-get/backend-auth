@@ -5,13 +5,11 @@ app/api/auth.py의 signup/confirm/resend endpoint는 request parsing과
 이 모듈 호출, 그리고 예외를 HTTPException으로 변환하는 역할만 담당한다.
 Cognito 호출 + DB 저장이 뒤섞인 복합 흐름은 모두 여기에 둔다.
 
-기존 app/services/member_service.py의 bootstrap_member()가 이미
-member/member_agreement 생성과 필수 약관 조회 로직을 갖고 있으므로,
-이 모듈은 그 로직을 다시 작성하지 않고 재사용한다. bootstrap_member는
-member.status를 ACTIVE로 고정 생성하므로, 이 모듈은 그 결과를 다시
-PENDING으로 되돌리는 방식으로 재사용한다(§아래 create_pending_member
-참고). member 테이블 자체의 컬럼 구성이나 검증 순서를 다시 구현하지
-않기 위한 선택이다.
+member/member_agreement 생성과 필수 약관 조회 로직은
+_create_pending_member(아래)가 담당한다. member.status를 PENDING으로
+생성한다는 점을 제외하면(이메일 인증 전이므로), 검증 순서와
+commit/rollback 경계는 member_service.py의 회원탈퇴 로직과 동일한
+관례(트랜잭션 하나로 처리, 실패 시 전체 rollback)를 따른다.
 """
 
 import uuid
@@ -115,12 +113,10 @@ def _create_pending_member(
     member row(status=PENDING)와 필수/선택 약관 AGREE 이력을 하나의
     트랜잭션으로 생성한다.
 
-    app/services/member_service.py의 bootstrap_member()와 동일한 필수
-    약관 조회/검증 순서를 따르되, status를 ACTIVE가 아니라 PENDING으로
-    생성한다는 점만 다르다. commit/rollback 경계도 bootstrap_member와
-    동일한 패턴(예외 시 전체 rollback, 성공 시 한 번만 commit)이다.
-    이 함수는 email/member_id 중복 검사를 하지 않는다(호출자가 이미
-    수행했다는 전제).
+    status는 ACTIVE가 아니라 PENDING으로 생성한다(이메일 인증 전).
+    commit/rollback 경계는 예외 시 전체 rollback, 성공 시 한 번만
+    commit하는 패턴이다. 이 함수는 email/member_id 중복 검사를 하지
+    않는다(호출자가 이미 수행했다는 전제).
     """
     try:
         terms_of_service = terms_repository.get_current_by_code(TERMS_OF_SERVICE_CODE)

@@ -32,7 +32,6 @@ from app.schemas.auth import (
     PasswordChangeRequest,
     PasswordForgotRequest,
     PasswordResetRequest,
-    RefreshTokenRequest,
     RefreshTokenResponse,
     SignupConfirmRequest,
     SignupConfirmResponse,
@@ -41,7 +40,7 @@ from app.schemas.auth import (
     SignupResponse,
 )
 from app.schemas.user import MemberResponse
-from app.services.auth_service import check_availability, refresh_access_token
+from app.services.auth_service import check_availability
 from app.services.login_service import (
     InvalidCognitoIdentityError,
     MemberEmailNotVerifiedError,
@@ -200,7 +199,6 @@ def login_endpoint(
 @router.post("/refresh", response_model=RefreshTokenResponse)
 def refresh_token_endpoint(
     response: Response,
-    payload: RefreshTokenRequest | None = Body(default=None),
     refresh_token_cookie: str | None = Cookie(
         default=None, alias=REFRESH_TOKEN_COOKIE_NAME
     ),
@@ -209,90 +207,61 @@ def refresh_token_endpoint(
     ),
 ):
     """
-    Cognito Refresh Token으로 새 Access Token을 재발급한다.
+    Cognito Refresh Token으로 새 Access Token을 재발급한다
+    (CLIAR-153/162, 최종 계약).
 
-    최종 계약(CLIAR-153, Phase 4): **request body 없음**. refresh_token
-    과 refresh_sub HttpOnly 쿠키만 사용하며, 신규 backend App
-    Client(secret 있음) + SECRET_HASH=f(refresh_sub)로 Cognito
-    REFRESH_TOKEN_AUTH를 호출한다. 새 Refresh Token이 반환되면
-    (rotation 활성화 시) refresh_token 쿠키를 갱신한다.
+    **request body 없음**. request body가 오더라도 그 내용을 refresh
+    token으로 사용하지 않는다 — refresh_token과 refresh_sub HttpOnly
+    쿠키만 사용하며, 신규 backend App Client(secret 있음) +
+    SECRET_HASH=f(refresh_sub)로 Cognito REFRESH_TOKEN_AUTH를
+    호출한다. 새 Refresh Token이 반환되면(rotation 활성화 시)
+    refresh_token 쿠키를 갱신한다.
 
-    LEGACY(CLIAR-125, Phase 7에서 제거): refresh_token/refresh_sub
-    쿠키가 **둘 다** 없고 request body에 refresh_token이 있으면, 기존
-    FE 계약을 깨지 않기 위해 예전 경로(기존 FE App Client, SECRET_HASH
-    없음)로 그대로 처리한다. 기존 body 방식에 신규 backend client
-    secret을 억지로 적용하지 않는다(그렇게 하면 기존 FE가 발급받은
-    refresh token이 즉시 거부된다).
+    두 쿠키 중 하나라도 없으면(둘 다 없음, 또는 한쪽만 있음) 401을
+    반환하고 남은 쿠키까지 함께 삭제한다 — 두 쿠키는 항상 한 쌍으로
+    발급/삭제되므로, 한쪽만 있는 상태는 더 이상 갱신에 쓸 수 없다.
 
-    두 쿠키 중 **하나라도** 존재하면 그 시점부터 쿠키 모드로
-    간주한다: 완전한 쌍(둘 다 있음)이면 신규 경로를 진행하고, 한쪽만
-    있으면(예: refresh_sub만 남고 refresh_token만 만료/삭제된 상태)
-    legacy body 존재 여부와 무관하게 401 + 두 쿠키 clear로 실패시킨다.
-    쿠키가 하나라도 있는 상태에서 legacy body로 조용히 넘어가면,
-    브라우저가 들고 있는 새 쿠키 계약과 서버가 실제로 검증한 자격
-    증명이 어긋난 채로 로그인 세션이 유지되는 결과가 된다.
+    CLIAR-125의 legacy body 기반 refresh(기존 FE App Client, request
+    body의 refresh_token 사용)는 Phase 7에서 제거되었다 — FE가 이
+    계약을 사용한 적이 없음이 확인되어, 신규 FE는 처음부터 쿠키
+    기반 refresh만 사용한다.
 
     Access Token이 만료됐을 때 사용하는 API이므로 이 endpoint는
     Bearer Access Token 인증을 요구하지 않는다.
     """
-    if refresh_token_cookie or refresh_sub_cookie:
-        # ---- 최종 계약: 쿠키 기반 ----
-        if not (refresh_token_cookie and refresh_sub_cookie):
-            # 두 쿠키는 항상 한 쌍으로 발급/삭제된다. 한쪽만 남아 있다면
-            # (legacy body가 함께 왔더라도) 더 이상 갱신에 쓸 수 없는
-            # 상태이므로 legacy로 넘기지 않고 남은 쿠키를 정리한다.
-            return _unauthorized_clearing_refresh_cookies(
-                "Refresh session cookies are missing or incomplete"
-            )
-
-        try:
-            result = refresh_session(
-                refresh_token=refresh_token_cookie, sub=refresh_sub_cookie
-            )
-        except CognitoApiError as e:
-            if e.status_code == status.HTTP_401_UNAUTHORIZED:
-                # NotAuthorizedException/UserNotFoundException: 이
-                # refresh token으로는 더 이상 갱신할 수 없으므로 쿠키를
-                # 지워 FE가 재로그인 흐름으로 넘어가게 한다.
-                detail = e.detail if isinstance(e.detail, str) else str(e.detail)
-                return _unauthorized_clearing_refresh_cookies(detail)
-            raise HTTPException(status_code=e.status_code, detail=e.detail)
-
-        if result.refresh_token:
-            # Refresh Token Rotation 대응. refresh_sub는 동일한 값으로
-            # 다시 내려 유지한다.
-            set_refresh_cookies(
-                response,
-                refresh_token=result.refresh_token,
-                sub=refresh_sub_cookie,
-            )
-
-        return RefreshTokenResponse(
-            access_token=result.access_token,
-            token_type=result.token_type,
-            expires_in=result.expires_in,
-            id_token=result.id_token,
-        )
-
-    # ---- LEGACY 경로 (Phase 7에서 이 블록 전체를 제거) ----
-    if payload is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Refresh session cookies are missing",
+    if not (refresh_token_cookie and refresh_sub_cookie):
+        return _unauthorized_clearing_refresh_cookies(
+            "Refresh session cookies are missing or incomplete"
         )
 
     try:
-        return refresh_access_token(payload.refresh_token)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Cognito rejected the refresh token",
+        result = refresh_session(
+            refresh_token=refresh_token_cookie, sub=refresh_sub_cookie
         )
-    except RuntimeError:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Could not refresh the access token",
+    except CognitoApiError as e:
+        if e.status_code == status.HTTP_401_UNAUTHORIZED:
+            # NotAuthorizedException/UserNotFoundException: 이
+            # refresh token으로는 더 이상 갱신할 수 없으므로 쿠키를
+            # 지워 FE가 재로그인 흐름으로 넘어가게 한다.
+            detail = e.detail if isinstance(e.detail, str) else str(e.detail)
+            return _unauthorized_clearing_refresh_cookies(detail)
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+    if result.refresh_token:
+        # Refresh Token Rotation 대응. refresh_sub는 동일한 값으로
+        # 다시 내려 유지한다.
+        set_refresh_cookies(
+            response,
+            refresh_token=result.refresh_token,
+            sub=refresh_sub_cookie,
         )
+
+    return RefreshTokenResponse(
+        access_token=result.access_token,
+        token_type=result.token_type,
+        expires_in=result.expires_in,
+        id_token=result.id_token,
+    )
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
