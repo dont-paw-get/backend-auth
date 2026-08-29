@@ -49,7 +49,16 @@ class SignupError(Exception):
 
 
 class EmailAlreadyRegisteredError(SignupError):
-    """이미 ACTIVE 또는 PENDING인 member가 해당 이메일을 사용 중인 경우."""
+    """
+    현재 유효한(탈퇴 완료되지 않은) member가 해당 이메일을 사용 중인
+    경우(CLIAR-177).
+
+    ACTIVE, PENDING, 그리고 탈퇴 처리가 아직 완료되지 않은
+    WITHDRAWN(status=WITHDRAWN이지만 deleted_at=NULL — Cognito
+    DeleteUser가 아직 확정되지 않은 상태)이 여기 해당한다. 탈퇴가
+    완료된(deleted_at 설정됨) WITHDRAWN 회원의 이메일은 이 예외를
+    발생시키지 않는다(재가입 허용).
+    """
 
 
 class SignupPersistenceError(SignupError):
@@ -188,20 +197,17 @@ def sign_up_member(
       1. email 정규화, nickname 정규화, 필수 동의 검증(모두
          member_service의 기존 헬퍼 재사용 — nickname 중복 검사는
          하지 않는다, CLIAR-144 최종 정책)
-      2. DB에서 기존 email 상태 확인
-         - ACTIVE/PENDING member가 이미 존재 -> EmailAlreadyRegisteredError
-         - WITHDRAWN member가 존재하는 경우: PLAN.md는 이 케이스를
-           명시적으로 다루지 않는다(§4.1 orphan recovery는 Cognito
-           UsernameExistsException 발생 시의 흐름만 다루며, "DB에 이미
-           WITHDRAWN row가 있다"는 경우는 별도로 언급되지 않는다).
-           현재 코드 정책상 member.email은 UNIQUE 컬럼이므로, WITHDRAWN
-           row가 있는 채로 새 member row를 또 만들면 email UNIQUE
-           제약 위반(IntegrityError)이 발생한다. 이 케이스의 정책
-           (재가입 허용 여부, 허용한다면 기존 row 재활용 여부)은
-           PLAN.md/현재 코드 어디에도 결정되어 있지 않으므로, 이번
-           구현은 이 케이스를 EmailAlreadyRegisteredError(409)로
-           처리한다 — 임의로 재가입을 허용하는 새 정책을 만들지
-           않기 위한 보수적 선택이며, 완료 보고에 명시한다.
+      2. DB에서 기존 email 상태 확인 (CLIAR-177)
+         - user_repository.get_by_email은 deleted_at IS NULL인 행만
+           조회하므로(탈퇴 완료된 회원은 조회되지 않음), 결과가 있으면
+           ACTIVE/PENDING/탈퇴 처리 중(WITHDRAWN이지만 deleted_at이
+           아직 없음) 중 하나 -> EmailAlreadyRegisteredError(409).
+         - 탈퇴가 완료된(deleted_at 설정됨) WITHDRAWN row만 있는
+           경우: get_by_email이 그 row를 반환하지 않으므로 중복으로
+           판단하지 않는다 -> 새 member row 생성으로 진행한다. 기존
+           WITHDRAWN row는 그대로 보존되며(재활성화/재사용하지
+           않음), 새 row는 Cognito가 새로 발급한 sub를 member_id로
+           사용한다.
       3. Cognito SignUp 호출
          - 성공 -> UserSub를 member_id로 PENDING member 생성
          - UsernameExistsException -> orphan recovery(§_recover_from_username_exists)
@@ -218,18 +224,13 @@ def sign_up_member(
         )
 
     existing_member = user_repository.get_by_email(normalized_email)
-    if existing_member is not None and existing_member.status != MemberStatus.WITHDRAWN:
-        # ACTIVE 또는 PENDING. CLIAR-144 정책: PENDING email도 Cognito
-        # User Pool에서 이미 점유된 상태이므로 "이미 가입됨"으로 취급.
+    if existing_member is not None:
+        # get_by_email은 deleted_at IS NULL인 행만 반환하므로, 여기
+        # 도달했다는 것은 ACTIVE/PENDING/탈퇴 처리 중(WITHDRAWN이지만
+        # 아직 deleted_at이 없음) 중 하나라는 뜻이다 — 탈퇴가 완료된
+        # 회원의 이메일이었다면 애초에 조회되지 않는다.
         raise EmailAlreadyRegisteredError(
             f"Email {normalized_email!r} is already registered"
-        )
-    if existing_member is not None and existing_member.status == MemberStatus.WITHDRAWN:
-        # 위 docstring 참고: PLAN.md/기존 정책에 명시되지 않은 케이스.
-        # 보수적으로 409 처리한다.
-        raise EmailAlreadyRegisteredError(
-            f"Email {normalized_email!r} was previously withdrawn; "
-            "re-registration policy is not yet defined"
         )
 
     from botocore.exceptions import ClientError, EndpointConnectionError

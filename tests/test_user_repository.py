@@ -11,6 +11,7 @@ UserRepository의 조회 메서드 테스트.
 """
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine
@@ -48,12 +49,14 @@ def _create_member(
     email="member@example.com",
     nickname="membernick",
     status=MemberStatus.ACTIVE,
+    deleted_at=None,
 ):
     member = User(
         member_id=uuid.uuid4(),
         email=email,
         nickname=nickname,
         status=status,
+        deleted_at=deleted_at,
     )
     db_session.add(member)
     db_session.commit()
@@ -76,13 +79,15 @@ class TestGetByEmail:
         "status",
         [MemberStatus.PENDING, MemberStatus.ACTIVE, MemberStatus.WITHDRAWN],
     )
-    def test_returns_member_regardless_of_status(
+    def test_returns_member_regardless_of_status_when_not_deleted(
         self, db_session, repository, status
     ):
         """
-        status로 필터링하지 않는다. 상태에 따른 판단은 호출자(service)의
-        책임이며, repository는 조회만 담당한다. 특히 회원가입 재시도
-        경로에서 PENDING/WITHDRAWN 회원을 찾아낼 수 있어야 한다.
+        status만으로는 필터링하지 않는다(deleted_at IS NULL인 한
+        status에 관계없이 반환됨). 상태에 따른 추가 판단은
+        호출자(service)의 책임이며, repository는 조회만 담당한다.
+        특히 회원가입 재시도 경로에서 PENDING과, 탈퇴 처리 중(WITHDRAWN
+        이지만 deleted_at은 아직 없음)인 회원을 찾아낼 수 있어야 한다.
         """
         created = _create_member(db_session, email="any@example.com", status=status)
 
@@ -91,6 +96,51 @@ class TestGetByEmail:
         assert found is not None
         assert found.member_id == created.member_id
         assert found.status == status
+
+    def test_returns_none_for_completed_withdrawal(self, db_session, repository):
+        """CLIAR-177: deleted_at이 설정된(탈퇴 완료) 회원은 반환하지
+        않는다 — 재가입을 허용하기 위한 정책."""
+        _create_member(
+            db_session,
+            email="withdrawn@example.com",
+            status=MemberStatus.WITHDRAWN,
+            deleted_at=datetime.now(timezone.utc) - timedelta(days=1),
+        )
+
+        assert repository.get_by_email("withdrawn@example.com") is None
+
+    def test_picks_the_live_row_when_old_withdrawn_rows_share_the_email(
+        self, db_session, repository
+    ):
+        """
+        CLIAR-177: 같은 이메일로 여러 개의 완료된 WITHDRAWN 이력 행이
+        존재해도(우연히 여러 번 가입/탈퇴를 반복한 경우), deleted_at IS
+        NULL인 "현재" 행 하나만 결정론적으로 반환해야 한다 — 과거 행이
+        LIMIT 1에 의해 임의로 선택되면 안 된다.
+        """
+        _create_member(
+            db_session,
+            email="recycled@example.com",
+            status=MemberStatus.WITHDRAWN,
+            deleted_at=datetime.now(timezone.utc) - timedelta(days=30),
+        )
+        _create_member(
+            db_session,
+            email="recycled@example.com",
+            status=MemberStatus.WITHDRAWN,
+            deleted_at=datetime.now(timezone.utc) - timedelta(days=10),
+        )
+        live = _create_member(
+            db_session,
+            email="recycled@example.com",
+            status=MemberStatus.PENDING,
+        )
+
+        found = repository.get_by_email("recycled@example.com")
+
+        assert found is not None
+        assert found.member_id == live.member_id
+        assert found.status == MemberStatus.PENDING
 
     def test_does_not_normalize_the_given_email(self, db_session, repository):
         """
@@ -125,6 +175,30 @@ class TestExistsByEmail:
 
     def test_false_when_email_does_not_exist(self, repository):
         assert repository.exists_by_email("free@example.com") is False
+
+    def test_true_for_withdrawal_in_progress_member(self, db_session, repository):
+        """CLIAR-177: status=WITHDRAWN이지만 deleted_at이 아직 없는
+        경우(Cognito DeleteUser 미확정)는 여전히 "사용 중"이다."""
+        _create_member(
+            db_session,
+            email="mid-withdrawal@example.com",
+            status=MemberStatus.WITHDRAWN,
+            deleted_at=None,
+        )
+
+        assert repository.exists_by_email("mid-withdrawal@example.com") is True
+
+    def test_false_for_completed_withdrawal(self, db_session, repository):
+        """CLIAR-177: deleted_at이 설정된(탈퇴 완료) 회원의 이메일은
+        더 이상 "사용 중"이 아니다 — 재가입 허용 정책."""
+        _create_member(
+            db_session,
+            email="withdrawn@example.com",
+            status=MemberStatus.WITHDRAWN,
+            deleted_at=datetime.now(timezone.utc) - timedelta(days=1),
+        )
+
+        assert repository.exists_by_email("withdrawn@example.com") is False
 
 
 class TestExistsByNickname:

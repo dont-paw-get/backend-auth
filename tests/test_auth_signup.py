@@ -25,7 +25,7 @@ from app.core import cognito_auth
 from app.core.config import settings
 from app.core.database import Base, get_db
 from app.main import app
-from app.models.member_agreement import MemberAgreement
+from app.models.member_agreement import MemberAgreement, MemberAgreementAction
 from app.models.terms import Terms
 from app.models.user import MemberStatus, User
 
@@ -89,8 +89,9 @@ def _seed_terms(db_session, code):
 
 
 def _seed_required_terms(db_session):
-    _seed_terms(db_session, "TERMS_OF_SERVICE")
-    _seed_terms(db_session, "PRIVACY")
+    tos = _seed_terms(db_session, "TERMS_OF_SERVICE")
+    privacy = _seed_terms(db_session, "PRIVACY")
+    return [tos, privacy]
 
 
 def _create_member(
@@ -99,12 +100,14 @@ def _create_member(
     email="existing@example.com",
     nickname="existing-nick",
     status=MemberStatus.ACTIVE,
+    deleted_at=None,
 ):
     member = User(
         member_id=member_id or uuid.uuid4(),
         email=email,
         nickname=nickname,
         status=status,
+        deleted_at=deleted_at,
     )
     db_session.add(member)
     db_session.commit()
@@ -302,6 +305,156 @@ class TestSignupEmailDuplicate:
         client.post(SIGNUP_ENDPOINT, json=_valid_signup_body(email="taken@example.com"))
 
         assert len(fake_client.sign_up_calls) == 0
+
+    def test_withdrawal_in_progress_email_returns_409(self, client, db_session, monkeypatch):
+        """CLIAR-177: status=WITHDRAWN이지만 deleted_at이 아직 없는
+        경우(Cognito DeleteUser가 아직 확정되지 않은, 탈퇴 처리 중인
+        상태)는 재가입을 허용하면 안 된다 — Cognito 쪽 계정이 아직
+        남아있을 수 있다."""
+        _seed_required_terms(db_session)
+        _create_member(
+            db_session,
+            email="mid-withdrawal@example.com",
+            status=MemberStatus.WITHDRAWN,
+            deleted_at=None,
+        )
+        _patch_client(monkeypatch, _FakeCognitoClient())
+
+        response = client.post(
+            SIGNUP_ENDPOINT,
+            json=_valid_signup_body(email="mid-withdrawal@example.com"),
+        )
+
+        assert response.status_code == 409
+
+
+class TestSignupAfterCompletedWithdrawal:
+    """CLIAR-177: 탈퇴 완료(status=WITHDRAWN, deleted_at 설정됨)된
+    회원의 이메일로 재가입할 수 있어야 한다."""
+
+    def test_withdrawn_email_returns_201(self, client, db_session, monkeypatch):
+        _seed_required_terms(db_session)
+        _create_member(
+            db_session,
+            email="withdrawn@example.com",
+            status=MemberStatus.WITHDRAWN,
+            deleted_at=datetime.now(timezone.utc) - timedelta(days=1),
+        )
+        _patch_client(monkeypatch, _FakeCognitoClient())
+
+        response = client.post(
+            SIGNUP_ENDPOINT, json=_valid_signup_body(email="withdrawn@example.com")
+        )
+
+        assert response.status_code == 201
+
+    def test_new_member_id_differs_from_old_withdrawn_row(
+        self, client, db_session, monkeypatch
+    ):
+        """기존 WITHDRAWN row를 재활성화하지 않는다 — 새 member row는
+        Cognito가 새로 발급한 sub를 그대로 member_id로 사용한다."""
+        _seed_required_terms(db_session)
+        old_member = _create_member(
+            db_session,
+            email="withdrawn@example.com",
+            status=MemberStatus.WITHDRAWN,
+            deleted_at=datetime.now(timezone.utc) - timedelta(days=1),
+        )
+        old_member_id = old_member.member_id
+        new_sub = str(uuid.uuid4())
+        _patch_client(monkeypatch, _FakeCognitoClient(user_sub=new_sub))
+
+        response = client.post(
+            SIGNUP_ENDPOINT, json=_valid_signup_body(email="withdrawn@example.com")
+        )
+
+        assert response.status_code == 201
+        new_member_id = uuid.UUID(response.json()["member_id"])
+        assert new_member_id != old_member_id
+        assert str(new_member_id) == new_sub
+
+    def test_old_withdrawn_row_is_preserved_unchanged(
+        self, client, db_session, monkeypatch
+    ):
+        _seed_required_terms(db_session)
+        old_member = _create_member(
+            db_session,
+            email="withdrawn@example.com",
+            status=MemberStatus.WITHDRAWN,
+            deleted_at=datetime.now(timezone.utc) - timedelta(days=1),
+        )
+        old_member_id = old_member.member_id
+        old_deleted_at = old_member.deleted_at
+        _patch_client(monkeypatch, _FakeCognitoClient())
+
+        response = client.post(
+            SIGNUP_ENDPOINT, json=_valid_signup_body(email="withdrawn@example.com")
+        )
+
+        assert response.status_code == 201
+        db_session.expire_all()
+        old_row = (
+            db_session.query(User).filter(User.member_id == old_member_id).one()
+        )
+        assert old_row.status == MemberStatus.WITHDRAWN
+        assert old_row.deleted_at == old_deleted_at
+        assert old_row.email == "withdrawn@example.com"
+
+    def test_new_and_old_rows_coexist_with_same_email(
+        self, client, db_session, monkeypatch
+    ):
+        _seed_required_terms(db_session)
+        _create_member(
+            db_session,
+            email="withdrawn@example.com",
+            status=MemberStatus.WITHDRAWN,
+            deleted_at=datetime.now(timezone.utc) - timedelta(days=1),
+        )
+        _patch_client(monkeypatch, _FakeCognitoClient())
+
+        response = client.post(
+            SIGNUP_ENDPOINT, json=_valid_signup_body(email="withdrawn@example.com")
+        )
+
+        assert response.status_code == 201
+        rows = (
+            db_session.query(User)
+            .filter(User.email == "withdrawn@example.com")
+            .all()
+        )
+        assert len(rows) == 2
+        statuses = {row.status for row in rows}
+        assert statuses == {MemberStatus.WITHDRAWN, MemberStatus.PENDING}
+
+    def test_old_withdrawn_row_member_agreement_history_is_untouched(
+        self, client, db_session, monkeypatch
+    ):
+        terms = _seed_required_terms(db_session)
+        old_member = _create_member(
+            db_session,
+            email="withdrawn@example.com",
+            status=MemberStatus.WITHDRAWN,
+            deleted_at=datetime.now(timezone.utc) - timedelta(days=1),
+        )
+        old_agreement = MemberAgreement(
+            member_id=old_member.member_id,
+            terms_id=terms[0].id,
+            action=MemberAgreementAction.AGREE,
+        )
+        db_session.add(old_agreement)
+        db_session.commit()
+        old_agreement_id = old_agreement.id
+        old_member_id = old_member.member_id
+        _patch_client(monkeypatch, _FakeCognitoClient())
+
+        response = client.post(
+            SIGNUP_ENDPOINT, json=_valid_signup_body(email="withdrawn@example.com")
+        )
+
+        assert response.status_code == 201
+        db_session.expire_all()
+        agreement_after = db_session.get(MemberAgreement, old_agreement_id)
+        assert agreement_after.member_id == old_member_id
 
 
 class TestSignupValidation:
