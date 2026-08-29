@@ -64,7 +64,15 @@ class User(Base):
         Uuid(as_uuid=True), nullable=False, unique=True
     )
 
-    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    # email은 column-level UNIQUE가 아니다. 탈퇴 완료(deleted_at IS NOT
+    # NULL)된 회원의 이메일은 재가입을 허용해야 하므로, "현재 유효한
+    # 회원"만을 대상으로 하는 partial unique index
+    # (uq_member_email_active, WHERE deleted_at IS NULL)로 대신 강제한다
+    # — 이 index는 app/models/terms.py의 uk_terms_active_code와 동일한
+    # 이유로 ORM에는 선언하지 않고 Alembic migration에서만 정의한다
+    # (SQLAlchemy가 column-level unique=True를 다시 추가하면 이 정책이
+    # 깨진다).
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
 
     nickname: Mapped[str] = mapped_column(String(255), nullable=False)
 

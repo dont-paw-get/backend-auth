@@ -7,6 +7,7 @@ API -> Service -> Repository -> DB 흐름을 검증한다.
 """
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -52,12 +53,20 @@ def client(db_session):
     app.dependency_overrides.clear()
 
 
-def _create_user(db_session, *, email="taken@example.com", nickname="takennick"):
+def _create_user(
+    db_session,
+    *,
+    email="taken@example.com",
+    nickname="takennick",
+    status=MemberStatus.ACTIVE,
+    deleted_at=None,
+):
     user = User(
         member_id=uuid.uuid4(),
         email=email,
         nickname=nickname,
-        status=MemberStatus.ACTIVE,
+        status=status,
+        deleted_at=deleted_at,
     )
     db_session.add(user)
     db_session.commit()
@@ -93,6 +102,74 @@ class TestEmailAvailability:
         response = client.post(
             ENDPOINT, json={"field": "EMAIL", "value": "  taken@example.com  "}
         )
+
+        assert response.status_code == 200
+        assert response.json() == {"field": "EMAIL", "available": False}
+
+    def test_pending_email_returns_available_false(self, client, db_session):
+        _create_user(
+            db_session, email="pending@example.com", status=MemberStatus.PENDING
+        )
+
+        response = client.post(ENDPOINT, json={"field": "EMAIL", "value": "pending@example.com"})
+
+        assert response.status_code == 200
+        assert response.json() == {"field": "EMAIL", "available": False}
+
+    def test_withdrawal_in_progress_email_returns_available_false(self, client, db_session):
+        """CLIAR-177: status=WITHDRAWN이지만 deleted_at이 아직 없는
+        경우(탈퇴 처리 중)는 사용 가능으로 보고하면 안 된다."""
+        _create_user(
+            db_session,
+            email="mid-withdrawal@example.com",
+            status=MemberStatus.WITHDRAWN,
+            deleted_at=None,
+        )
+
+        response = client.post(
+            ENDPOINT, json={"field": "EMAIL", "value": "mid-withdrawal@example.com"}
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"field": "EMAIL", "available": False}
+
+    def test_completed_withdrawal_email_returns_available_true(self, client, db_session):
+        """CLIAR-177: 탈퇴 완료(deleted_at 설정됨)된 회원의 이메일은
+        재가입 정책과 동일하게 사용 가능(available=True)으로
+        보고해야 한다."""
+        _create_user(
+            db_session,
+            email="withdrawn@example.com",
+            status=MemberStatus.WITHDRAWN,
+            deleted_at=datetime.now(timezone.utc) - timedelta(days=1),
+        )
+
+        response = client.post(ENDPOINT, json={"field": "EMAIL", "value": "withdrawn@example.com"})
+
+        assert response.status_code == 200
+        assert response.json() == {"field": "EMAIL", "available": True}
+
+    def test_email_reused_by_a_new_signup_returns_available_false_again(
+        self, client, db_session
+    ):
+        """CLIAR-177: 탈퇴 완료 회원의 이메일로 재가입이 실제로
+        일어나면(과거 WITHDRAWN row + 새 PENDING row가 같은 이메일로
+        공존), 다시 available=false여야 한다 — 과거 row에 흔들리지
+        않고 새로 생긴 현재 row를 정확히 반영해야 한다."""
+        _create_user(
+            db_session,
+            email="recycled@example.com",
+            status=MemberStatus.WITHDRAWN,
+            deleted_at=datetime.now(timezone.utc) - timedelta(days=1),
+        )
+        _create_user(
+            db_session,
+            email="recycled@example.com",
+            nickname="recycled-new",
+            status=MemberStatus.PENDING,
+        )
+
+        response = client.post(ENDPOINT, json={"field": "EMAIL", "value": "recycled@example.com"})
 
         assert response.status_code == 200
         assert response.json() == {"field": "EMAIL", "available": False}
