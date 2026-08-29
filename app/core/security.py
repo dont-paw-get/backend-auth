@@ -20,10 +20,10 @@ def _extract_and_verify_bearer_token(
     """
     Authorization 헤더에서 Cognito Access Token을 추출하고 검증한다.
 
-    GET/PATCH /users/me, POST /users/bootstrap이 모두 동일한 검증
-    경로를 공유하도록, Bearer 파싱과 Cognito 검증 로직을 이 한 곳에
-    모아두고 get_current_user_id/get_current_access_token이 이를
-    재사용한다(인증 로직을 endpoint/함수마다 복붙하지 않는다).
+    GET/PATCH/DELETE /users/me, POST /auth/password/change가 모두
+    동일한 검증 경로를 공유하도록, Bearer 파싱과 Cognito 검증 로직을
+    이 한 곳에 모아두고 get_current_user_id/get_current_access_token이
+    이를 재사용한다(인증 로직을 endpoint/함수마다 복붙하지 않는다).
 
     이 함수 자체를 FastAPI dependency로 선언해두면(파라미터에
     Header(...)를 직접 받는 형태), get_current_user_id와
@@ -95,9 +95,11 @@ def get_current_access_token(
     """
     Authorization Header에서 검증된 Cognito Access Token 원문을 반환한다.
 
-    POST /users/bootstrap처럼 sub 외에 Cognito GetUser 호출이 추가로
-    필요한 endpoint에서 사용한다. get_current_user_id와 동일한 검증
-    경로(_extract_and_verify_bearer_token)를 공유하며, 같은 request
+    DELETE /users/me(Cognito DeleteUser 호출)나 POST
+    /auth/password/change(Cognito ChangePassword 호출)처럼 sub 외에
+    access token 원문 자체가 추가로 필요한 endpoint에서 사용한다.
+    get_current_user_id와 동일한 검증 경로
+    (_extract_and_verify_bearer_token)를 공유하며, 같은 request
     안에서 이 endpoint가 get_current_user_id도 함께 Depends()하면
     FastAPI dependency 캐시로 실제 검증은 한 번만 실행된다.
     """

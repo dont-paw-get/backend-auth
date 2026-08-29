@@ -71,8 +71,8 @@ class User(Base):
     profile_image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # CLIAR-120: 기존 member row와의 호환을 위해 DB 레벨에서는 nullable을
-    # 허용한다(신규 bootstrap에서의 필수 여부는 API schema 레벨에서만
-    # 강제한다. app/schemas/user.py의 MemberBootstrapRequest 참고).
+    # 허용한다(신규 가입에서의 필수 여부는 API schema 레벨에서만
+    # 강제한다. app/schemas/auth.py의 SignupRequest 참고).
     birth_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     gender: Mapped[Gender | None] = mapped_column(

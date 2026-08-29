@@ -40,7 +40,8 @@ def secret_hash(username: str) -> str:
     client_id/client_secret은 항상 settings.COGNITO_BACKEND_CLIENT_ID/
     settings.COGNITO_BACKEND_CLIENT_SECRET에서 읽으며 하드코딩하지
     않는다. 이 값들은 신규 backend 전용 App Client(secret 보유) 것이며,
-    기존 FE App Client(COGNITO_CLIENT_ID, secret 없음)와는 다른 값이다.
+    기존 FE App Client(secret 없음) 설정과는 다른 값이다 — 그 기존
+    설정 자체는 CLIAR-162 Phase 7에서 제거되었다(app/core/config.py).
 
     신규 backend App Client 설정이 아직 배포 환경에 없는 경우(Phase 1
     시점에는 정상적인 상태), 값이 비어 있으면 조용히 잘못된 해시를
@@ -194,10 +195,8 @@ def extract_sub_from_user_attributes(response: dict) -> str:
     Cognito 응답의 UserAttributes 목록에서 sub 값을 추출한다.
 
     AdminGetUser와 GetUser는 응답 형태가 동일하게 UserAttributes
-    목록을 갖는다. app.core.cognito.get_cognito_user_email이 GetUser
-    응답에서 email 속성을 찾는 것과 동일한 패턴이며, 두 API가 같은
-    추출 로직을 공유하도록 이 함수 하나만 둔다. sub 속성이
-    없으면(비정상 응답) ValueError를 던진다.
+    목록을 갖는다. 두 API가 같은 추출 로직을 공유하도록 이 함수
+    하나만 둔다. sub 속성이 없으면(비정상 응답) ValueError를 던진다.
     """
     for attribute in response.get("UserAttributes", []):
         if attribute.get("Name") == "sub":
@@ -228,9 +227,9 @@ def extract_sub_from_admin_get_user(response: dict) -> str:
 # app/core/cognito_errors.py를 통해 한 곳에서만 결정한다.
 #
 # 이 모듈의 모든 호출은 신규 backend 전용 App Client(secret 있음)를
-# 사용한다. 기존 FE App Client(settings.COGNITO_CLIENT_ID, secret 없음)
-# 를 쓰는 app/core/cognito.py의 refresh_cognito_access_token(CLIAR-125
-# legacy 경로)과는 의도적으로 분리되어 있다.
+# 사용한다. 기존 FE App Client(secret 없음)를 쓰던 CLIAR-125 legacy
+# refresh 경로(app/core/cognito.py의 refresh_cognito_access_token)는
+# CLIAR-162 Phase 7에서 완전히 제거되었다.
 #
 # 토큰/비밀번호/secret 값은 이 모듈에서 로깅하지 않는다.
 # ---------------------------------------------------------------------------
@@ -338,10 +337,9 @@ def get_user_sub(*, access_token: str) -> str:
     보낸 값이 아니라 Cognito API 응답에서 온 값이므로, member 조회
     키로 그대로 신뢰할 수 있다.
 
-    기존 app.core.cognito.get_cognito_user_email이 같은 GetUser
-    응답에서 email을 꺼내는 것과 동일한 패턴이며, IAM 권한을
-    요구하지 않는다(access token으로만 인가된다). ClientError/
-    EndpointConnectionError는 잡지 않고 그대로 전파한다.
+    GetUser는 IAM 권한을 요구하지 않는다(access token으로만
+    인가된다). ClientError/EndpointConnectionError는 잡지 않고
+    그대로 전파한다.
     """
     client = get_cognito_idp_client()
     response = client.get_user(AccessToken=access_token)

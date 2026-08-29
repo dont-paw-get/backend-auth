@@ -12,12 +12,11 @@ class SignupRequest(BaseModel):
     """
     POST /api/v1/auth/signup 요청 schema (CLIAR-151).
 
-    PLAN.md §5의 계약과, 기존 MemberBootstrapRequest(app/schemas/user.py)
-    의 필드 구성을 그대로 따른다. member_id/sub는 client가 보내지
-    않으며 Cognito SignUp 응답의 UserSub에서만 얻는다(bootstrap과
-    동일한 원칙). CLIAR-144 최종 정책에 따라 nickname 중복 검사는
-    수행하지 않는다(이 schema도, 뒤이은 service 로직도 nickname
-    availability를 호출하지 않는다).
+    PLAN.md §5의 계약을 따른다. member_id/sub는 client가 보내지
+    않으며 Cognito SignUp 응답의 UserSub에서만 얻는다. CLIAR-144
+    최종 정책에 따라 nickname 중복 검사는 수행하지 않는다(이
+    schema도, 뒤이은 service 로직도 nickname availability를 호출하지
+    않는다).
 
     password는 SecretStr로 선언해 repr()/로그에 평문이 노출되지
     않게 한다(실제 값이 필요한 곳에서는 get_secret_value()로 명시적
@@ -105,37 +104,6 @@ class SignupResendRequest(BaseModel):
     def email_must_not_be_blank(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("email must not be empty or blank")
-        return value
-
-
-class RefreshTokenRequest(BaseModel):
-    """
-    POST /api/v1/auth/refresh 요청 schema (CLIAR-125) — LEGACY.
-
-    ⚠️ 이 schema는 과도기 하위호환 전용이다. CLIAR-153(Phase 4)부터
-    /auth/refresh의 최종 계약은 "request body 없음 + refresh_token /
-    refresh_sub HttpOnly 쿠키"이며, 이 body는 아직 쿠키 방식으로
-    전환하지 않은 기존 FE를 깨뜨리지 않기 위해서만 남아 있다.
-    쿠키가 존재하면 항상 쿠키 방식이 우선한다.
-
-    PLAN.md §12 Phase 7에서 FE 전환 완료를 확인한 뒤 이 schema와
-    legacy 분기를 함께 제거한다.
-
-    Access Token이 만료됐을 때 Cognito Refresh Token으로 새 Access
-    Token을 재발급받기 위한 요청이다. 이 endpoint는 Bearer Access
-    Token 인증을 요구하지 않는다(만료된 Access Token으로는 호출할 수
-    없어야 하는 API이기 때문).
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    refresh_token: str
-
-    @field_validator("refresh_token")
-    @classmethod
-    def refresh_token_must_not_be_blank(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("refresh_token must not be empty or blank")
         return value
 
 

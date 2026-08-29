@@ -97,20 +97,6 @@ class TestSecretHashUsesSettingsNotHardcoded:
 
         assert hash_with_secret_1 != hash_with_secret_2
 
-    def test_does_not_use_existing_fe_client_id(self, monkeypatch):
-        """기존 FE App Client(settings.COGNITO_CLIENT_ID)를 실수로 쓰지
-        않는지 확인한다. backend client id만 바뀌어도 결과가 달라져야
-        하며, 기존 COGNITO_CLIENT_ID를 바꿔도 결과가 그대로여야 한다."""
-        monkeypatch.setattr(settings, "COGNITO_BACKEND_CLIENT_ID", "backend-client-id")
-        monkeypatch.setattr(settings, "COGNITO_BACKEND_CLIENT_SECRET", "backend-secret")
-        monkeypatch.setattr(settings, "COGNITO_CLIENT_ID", "fe-client-id-one")
-        result_with_fe_client_1 = cognito_auth.secret_hash("user@example.com")
-
-        monkeypatch.setattr(settings, "COGNITO_CLIENT_ID", "fe-client-id-two")
-        result_with_fe_client_2 = cognito_auth.secret_hash("user@example.com")
-
-        assert result_with_fe_client_1 == result_with_fe_client_2
-
 
 class TestSecretHashMissingConfiguration:
     def test_missing_backend_client_id_raises_runtime_error(self, monkeypatch):

@@ -1,6 +1,6 @@
 """
 POST /api/v1/auth/refresh — 쿠키 기반 최종 계약 테스트
-(CLIAR-153, Phase 4).
+(CLIAR-153/162).
 
 최종 계약: request body 없음. refresh_token / refresh_sub HttpOnly
 쿠키만 사용하며, 신규 backend App Client(secret 있음)로
@@ -8,9 +8,10 @@ REFRESH_TOKEN_AUTH를 호출한다. SECRET_HASH의 username은 반드시
 refresh_sub(=Cognito sub)여야 한다(refresh token은 opaque 문자열이라
 BE가 sub를 추출할 수 없다).
 
-CLIAR-125의 legacy body 기반 refresh 계약이 그대로 유지되는지는
-tests/test_auth_refresh.py가 계속 검증한다. 이 파일은 신규 쿠키
-경로와, 두 경로가 공존할 때의 우선순위만 다룬다.
+CLIAR-125의 legacy body 기반 refresh는 Phase 7에서 완전히
+제거되었다(FE가 이 계약을 사용한 적이 없음이 확인됨). request body가
+오더라도 그 값을 refresh token으로 절대 사용하지 않는다
+(TestRefreshRequestBodyIsIgnored 참고).
 
 실제 AWS/Cognito에는 접속하지 않는다.
 """
@@ -21,7 +22,7 @@ import pytest
 from botocore.exceptions import ClientError, EndpointConnectionError
 from fastapi.testclient import TestClient
 
-from app.core import cognito, cognito_auth
+from app.core import cognito_auth
 from app.core.cognito_auth import secret_hash
 from app.core.config import settings
 from app.main import app
@@ -324,31 +325,19 @@ class TestCookieRefreshMissingCookies:
         assert _is_cleared(_cookie_header(response, "refresh_token"))
         assert _is_cleared(_cookie_header(response, "refresh_sub"))
 
-    def test_refresh_sub_only_with_legacy_body_does_not_call_legacy_cognito(
+    def test_refresh_sub_only_with_body_present_still_returns_401(
         self, client, monkeypatch
     ):
         """refresh_sub만 있고 refresh_token 쿠키가 없는 상태에서
-        legacy body가 함께 오더라도, 쿠키가 하나라도 존재하는 순간
-        쿠키 모드로 처리되어 legacy Cognito 호출로 넘어가면 안
-        된다."""
-        backend_client = _patch_cognito(monkeypatch, _FakeCognitoClient())
-
-        legacy_calls = []
-
-        class _LegacyClient:
-            def initiate_auth(self, **kwargs):  # pragma: no cover - 호출되면 실패
-                legacy_calls.append(kwargs)
-                return {
-                    "AuthenticationResult": {"AccessToken": "legacy", "ExpiresIn": 1}
-                }
-
-        monkeypatch.setattr(cognito, "get_cognito_idp_client", lambda: _LegacyClient())
+        request body에 refresh_token 비슷한 값이 함께 오더라도, 그
+        값을 대신 쓰지 않고 401 + 쿠키 clear로 실패해야 한다(더 이상
+        body fallback 경로가 없다)."""
+        fake = _patch_cognito(monkeypatch, _FakeCognitoClient())
         _set_refresh_cookies(client, refresh_token=None)
 
-        response = client.post(ENDPOINT, json={"refresh_token": "legacy-body-token"})
+        response = client.post(ENDPOINT, json={"refresh_token": "some-token"})
 
-        assert legacy_calls == []
-        assert backend_client.initiate_auth_calls == []
+        assert fake.initiate_auth_calls == []
         assert response.status_code == 401
         assert _is_cleared(_cookie_header(response, "refresh_token"))
         assert _is_cleared(_cookie_header(response, "refresh_sub"))
@@ -483,105 +472,42 @@ class TestCookieRefreshCognitoErrors:
         assert "refreshed-access-token" not in caplog.text
 
 
-class TestCookieRefreshTakesPrecedenceOverLegacyBody:
+class TestRefreshRequestBodyIsIgnored:
     """
-    과도기 동안 두 계약이 공존한다. 쿠키가 있으면 항상 신규 방식이
-    우선해야 한다(legacy body가 함께 와도 무시).
+    CLIAR-162 Phase 7 최종 계약: request body는 없어야 하며, 보내더라도
+    그 값을 refresh token으로 절대 사용하지 않는다(legacy body 기반
+    refresh는 완전히 제거되었다 — 더 이상 fallback 경로가 없다).
     """
 
-    def test_cookie_path_wins_when_both_cookie_and_body_are_present(
+    def test_cookie_path_ignores_a_request_body_with_a_different_token(
         self, client, monkeypatch
     ):
-        backend_client = _patch_cognito(monkeypatch, _FakeCognitoClient())
-
-        legacy_calls = []
-
-        class _LegacyClient:
-            def initiate_auth(self, **kwargs):  # pragma: no cover - 호출되면 실패
-                legacy_calls.append(kwargs)
-                return {"AuthenticationResult": {"AccessToken": "legacy", "ExpiresIn": 1}}
-
-        monkeypatch.setattr(cognito, "get_cognito_idp_client", lambda: _LegacyClient())
+        """쿠키와 body가 모두 있어도 실제 Cognito 호출에는 쿠키 값만
+        쓰이고, body의 refresh_token 값은 아무 영향도 주지 않는다."""
+        fake = _patch_cognito(monkeypatch, _FakeCognitoClient())
         _set_refresh_cookies(client)
 
-        body = client.post(
-            ENDPOINT, json={"refresh_token": "legacy-body-token"}
-        ).json()
+        response = client.post(
+            ENDPOINT, json={"refresh_token": "attacker-supplied-token"}
+        )
 
-        assert legacy_calls == []
-        assert body["access_token"] == "refreshed-access-token"
+        assert response.status_code == 200
         assert (
-            backend_client.initiate_auth_calls[0]["AuthParameters"]["REFRESH_TOKEN"]
+            fake.initiate_auth_calls[0]["AuthParameters"]["REFRESH_TOKEN"]
             == REFRESH_TOKEN
         )
 
-    def test_legacy_body_is_used_only_when_no_cookie_is_present(
+    def test_no_cookies_with_body_present_still_returns_401(
         self, client, monkeypatch
     ):
-        backend_client = _patch_cognito(monkeypatch, _FakeCognitoClient())
-
-        class _LegacyClient:
-            def __init__(self):
-                self.calls = []
-
-            def initiate_auth(self, **kwargs):
-                self.calls.append(kwargs)
-                return {
-                    "AuthenticationResult": {
-                        "AccessToken": "legacy-access-token",
-                        "ExpiresIn": 3600,
-                    }
-                }
-
-        legacy_client = _LegacyClient()
-        monkeypatch.setattr(cognito, "get_cognito_idp_client", lambda: legacy_client)
+        """쿠키가 없으면, body에 refresh_token이 있어도 더 이상 그
+        값으로 갱신을 시도하지 않는다(legacy fallback 없음)."""
+        fake = _patch_cognito(monkeypatch, _FakeCognitoClient())
         client.cookies.clear()
 
         response = client.post(
-            ENDPOINT, json={"refresh_token": "legacy-body-token"}
-        )
-        body = response.json()
-
-        assert response.status_code == 200
-        assert body["access_token"] == "legacy-access-token"
-        assert backend_client.initiate_auth_calls == []
-        # legacy 경로는 기존 FE App Client를 쓰고 SECRET_HASH를 보내지
-        # 않는다(신규 backend secret을 억지로 적용하지 않는다).
-        assert legacy_client.calls[0]["ClientId"] == settings.COGNITO_CLIENT_ID
-        assert legacy_client.calls[0]["AuthParameters"] == {
-            "REFRESH_TOKEN": "legacy-body-token"
-        }
-
-    def test_no_cookies_at_all_still_uses_legacy_body_successfully(
-        self, client, monkeypatch
-    ):
-        """A. 두 쿠키가 모두 없는 경우: 기존 CLIAR-125 legacy refresh가
-        그대로 성공해야 한다(회귀 없음)."""
-        backend_client = _patch_cognito(monkeypatch, _FakeCognitoClient())
-
-        class _LegacyClient:
-            def __init__(self):
-                self.calls = []
-
-            def initiate_auth(self, **kwargs):
-                self.calls.append(kwargs)
-                return {
-                    "AuthenticationResult": {
-                        "AccessToken": "legacy-access-token",
-                        "ExpiresIn": 3600,
-                        "TokenType": "Bearer",
-                    }
-                }
-
-        legacy_client = _LegacyClient()
-        monkeypatch.setattr(cognito, "get_cognito_idp_client", lambda: legacy_client)
-        client.cookies.clear()
-
-        response = client.post(
-            ENDPOINT, json={"refresh_token": "legacy-body-token"}
+            ENDPOINT, json={"refresh_token": "some-refresh-token"}
         )
 
-        assert response.status_code == 200
-        assert response.json()["access_token"] == "legacy-access-token"
-        assert backend_client.initiate_auth_calls == []
-        assert len(legacy_client.calls) == 1
+        assert response.status_code == 401
+        assert fake.initiate_auth_calls == []
