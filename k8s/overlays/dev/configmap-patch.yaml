@@ -19,9 +19,9 @@ data:
   # 별도로 주입해야 한다(k8s/secret.example.yaml 참고, Phase 7C 전
   # 필수 — 이 secret이 없으면 login/signup 등이 RuntimeError로 실패).
   COGNITO_BACKEND_CLIENT_ID: "du6sabh7hm17goodv6sd2n9ag"
-  # CLIAR-162 Phase 7B: dev ALB가 아직 HTTP:80만 제공하고 HTTPS가
-  # 없어(k8s/base/ingress.yaml) Secure 쿠키는 브라우저가 저장하지
-  # 않는다. dev에서만 한시적으로 비활성화한다(base 기본값 True, prod는
-  # 그대로 유지). dev ALB에 HTTPS가 붙으면 이 줄을 지워 base 기본값
-  # (True)을 다시 물려받도록 되돌려야 한다.
-  COOKIE_SECURE: "false"
+  # CloudFront(https://d1wab52ln5by5k.cloudfront.net/api/*)가
+  # backend-auth DEV ALB로 same-origin 라우팅되도록 구성되어, 브라우저는
+  # 항상 HTTPS로 auth API를 호출한다. 이제 Secure 쿠키가 정상 저장되므로
+  # base 기본값(True)과 동일하게 명시적으로 true로 둔다(과거 ALB
+  # HTTP:80 직접 노출 시절의 임시 비활성화는 종료).
+  COOKIE_SECURE: "true"
