@@ -46,7 +46,6 @@ class TestCorsAllowedOriginsParsing:
             DATABASE_URL="x",
             AWS_REGION="x",
             COGNITO_USER_POOL_ID="x",
-            COGNITO_CLIENT_ID="x",
             CORS_ALLOWED_ORIGINS="",
         ).cors_allowed_origins_list == []
 
@@ -55,7 +54,6 @@ class TestCorsAllowedOriginsParsing:
             DATABASE_URL="x",
             AWS_REGION="x",
             COGNITO_USER_POOL_ID="x",
-            COGNITO_CLIENT_ID="x",
             CORS_ALLOWED_ORIGINS="https://a.example.com, https://b.example.com",
         ).cors_allowed_origins_list
 
@@ -68,7 +66,6 @@ class TestCorsAllowedOriginsParsing:
             DATABASE_URL="x",
             AWS_REGION="x",
             COGNITO_USER_POOL_ID="x",
-            COGNITO_CLIENT_ID="x",
             CORS_ALLOWED_ORIGINS="*, https://a.example.com",
         ).cors_allowed_origins_list
 

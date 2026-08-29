@@ -7,11 +7,10 @@ app/api/auth.py의 login/refresh/logout endpoint는 request parsing,
 Cognito 호출 + member 상태 판정이 뒤섞인 흐름은 모두 여기에 둔다
 (app/services/signup_service.py와 동일한 책임 분리).
 
-기존 app/services/auth_service.py의 refresh_access_token()은 건드리지
-않는다. 그쪽은 CLIAR-125의 legacy body 기반 refresh(기존 FE App
-Client, SECRET_HASH 없음) 전용이며, 이 모듈은 신규 backend App
-Client(secret 있음) 전용이다. 두 경로를 한 함수에 섞지 않는 것은
-Phase 7에서 legacy 경로를 파일 단위로 깔끔히 제거하기 위해서다.
+이 모듈은 신규 backend App Client(secret 있음) 전용이다. CLIAR-125의
+legacy body 기반 refresh(기존 FE App Client, SECRET_HASH 없음)와
+그 전용 함수(app/services/auth_service.py의 refresh_access_token())는
+CLIAR-162 Phase 7에서 파일 단위로 완전히 제거되었다.
 
 이 모듈은 password / access token / id token / refresh token /
 client secret / Cognito sub 값을 로그에 남기지 않는다(PLAN.md §9.3).

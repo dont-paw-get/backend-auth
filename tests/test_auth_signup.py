@@ -6,8 +6,7 @@ BE 주도 회원가입: Cognito SignUp/ConfirmSignUp/ResendConfirmationCode를
 backend-auth가 호출하고, member row(PENDING -> ACTIVE)를 저장한다.
 실제 AWS/Cognito에는 접속하지 않는다. app.core.cognito_auth의
 get_cognito_idp_client를 monkeypatch해 boto3 client를 대체한다
-(기존 tests/test_cognito.py, tests/test_users_bootstrap.py와 동일한
-패턴).
+(기존 tests/test_cognito.py와 동일한 패턴).
 
 이 endpoint들은 Bearer Access Token 인증을 요구하지 않는다(아직
 로그인하지 않은 사용자가 호출하는 API이기 때문).
