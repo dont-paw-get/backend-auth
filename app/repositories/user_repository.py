@@ -23,35 +23,64 @@ class UserRepository:
         stmt = select(User).where(User.member_id == user_id).limit(1)
         return self.db.execute(stmt).scalar_one_or_none()
 
+    def get_by_email(self, email: str) -> User | None:
+        """
+        정규화된 email로 "현재 유효한"(탈퇴 완료되지 않은) MEMBER를
+        조회한다.
+
+        deleted_at IS NULL인 행만 대상으로 한다. 탈퇴 완료(deleted_at
+        설정됨)된 회원의 이메일은 재가입을 허용하므로(CLIAR-177),
+        같은 email로 여러 WITHDRAWN 이력 행이 존재할 수 있다 — 이
+        필터가 없으면 그중 임의의 과거 행이 반환될 수 있다(ORDER BY가
+        없는 LIMIT 1이므로 어떤 행이 반환될지 결정론적이지 않다).
+        deleted_at IS NULL인 행은 uq_member_email_active partial
+        unique index(같은 이유로 app/models/user.py 참고)에 의해
+        email당 최대 1건만 존재할 수 있으므로 이 조회는 항상
+        결정론적이다.
+
+        호출자는 auth_service._normalize_email과 동일하게 strip +
+        lower를 적용한 값을 넘겨야 한다(이 메서드는 정규화를 수행하지
+        않는다).
+
+        status로는 필터링하지 않는다(ACTIVE/PENDING/WITHDRAWN-진행중
+        모두 "아직 유효한" 것으로 취급 — deleted_at만이 재가입 가능
+        여부를 결정한다). 상태에 따른 추가 판단은 호출자(service)의
+        책임이다.
+        """
+        stmt = (
+            select(User)
+            .where(User.email == email, User.deleted_at.is_(None))
+            .limit(1)
+        )
+        return self.db.execute(stmt).scalar_one_or_none()
+
     def exists_by_email(self, email: str) -> bool:
-        """주어진 이메일(정규화된 값)이 이미 존재하는지 확인한다."""
-        stmt = select(User.member_id).where(User.email == email).limit(1)
+        """
+        주어진 이메일(정규화된 값)을 현재 유효한(탈퇴 완료되지 않은)
+        회원이 사용 중인지 확인한다.
+
+        deleted_at IS NULL인 행만 "사용 중"으로 계산한다(CLIAR-177).
+        탈퇴가 완료된(deleted_at 설정됨) 회원의 이메일은 재가입 가능
+        해야 하므로 여기서 제외한다.
+
+        status로는 필터링하지 않는 것은 의도적이다. PENDING(이메일
+        인증 대기) 회원의 이메일도 Cognito User Pool에서 이미 점유된
+        상태이므로, 같은 이메일로의 신규 가입은 어차피
+        UsernameExistsException으로 실패한다. 마찬가지로 탈퇴 처리가
+        아직 완료되지 않은(status=WITHDRAWN이지만 deleted_at=NULL,
+        즉 Cognito DeleteUser가 아직 확정되지 않은) 회원도 Cognito
+        쪽 계정이 남아있을 수 있으므로 "사용 중"으로 취급한다.
+        """
+        stmt = (
+            select(User.member_id)
+            .where(User.email == email, User.deleted_at.is_(None))
+            .limit(1)
+        )
         return self.db.execute(stmt).first() is not None
 
     def exists_by_nickname(self, nickname: str) -> bool:
         """주어진 닉네임이 이미 존재하는지 확인한다."""
         stmt = select(User.member_id).where(User.nickname == nickname).limit(1)
-        return self.db.execute(stmt).first() is not None
-
-    def exists_by_nickname_excluding_user_id(
-        self, nickname: str, exclude_user_id: uuid.UUID
-    ) -> bool:
-        """
-        본인(exclude_user_id, member_id)을 제외한 다른 MEMBER가 이미
-        해당 닉네임을 사용 중인지 확인한다. 프로필 수정 시 "본인의
-        기존 닉네임을 그대로 다시 보내는 경우"를 중복으로 오판하지
-        않기 위해 사용한다.
-
-        CLIAR-87에서 nickname UNIQUE 제약이 제거되었으므로, 이 메서드는
-        더 이상 DB 제약 위반을 막기 위한 목적이 아니다. 다만 기존
-        API 계약(PATCH /users/me에서 타인의 닉네임 재사용 시 409)을
-        그대로 유지하기 위해 애플리케이션 레벨 검사로 존속시킨다.
-        """
-        stmt = (
-            select(User.member_id)
-            .where(User.nickname == nickname, User.member_id != exclude_user_id)
-            .limit(1)
-        )
         return self.db.execute(stmt).first() is not None
 
     def create(self, member: User) -> User:

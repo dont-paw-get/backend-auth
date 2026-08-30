@@ -22,8 +22,13 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from app.core import cognito
+from app.core import cognito, security
 from app.core.config import settings
+
+# CLIAR-162 Phase 7: COGNITO_CLIENT_ID(기존 FE App Client) 설정 자체가
+# app/core/config.py에서 제거되었으므로, "기존 FE client_id"를
+# 표현해야 하는 테스트는 임의의 고정 문자열을 대신 사용한다.
+_LEGACY_FE_CLIENT_ID = "legacy-fe-app-client-id"
 
 
 @pytest.fixture(scope="module")
@@ -80,12 +85,24 @@ def _make_token(
     return jwt.encode(payload, rsa_key_pair, algorithm="RS256")
 
 
+@pytest.fixture(autouse=True)
+def backend_client_id_configured(monkeypatch):
+    """
+    이 파일의 모든 테스트는 기본적으로 COGNITO_BACKEND_CLIENT_ID가
+    정상적으로 배포되어 있는 상태를 전제로 한다(CLIAR-162 Phase 7
+    최종: backend App Client만 허용). 설정 누락(None/빈 문자열) 자체를
+    검증하는 테스트는 이 fixture가 이미 설정한 값을 각자
+    monkeypatch로 다시 덮어쓴다.
+    """
+    monkeypatch.setattr(settings, "COGNITO_BACKEND_CLIENT_ID", "backend-app-client-id")
+
+
 class TestVerifyCognitoTokenAccepts:
-    def test_valid_access_token_is_accepted(self, signing_key_patch):
+    def test_valid_backend_access_token_is_accepted(self, signing_key_patch):
         token = _make_token(
             signing_key_patch,
             token_use="access",
-            client_id=settings.COGNITO_CLIENT_ID,
+            client_id=settings.COGNITO_BACKEND_CLIENT_ID,
         )
 
         payload = cognito.verify_cognito_token(token)
@@ -100,18 +117,76 @@ class TestVerifyCognitoTokenRejects:
         token = _make_token(
             signing_key_patch,
             token_use="id",
-            aud=settings.COGNITO_CLIENT_ID,
+            aud=settings.COGNITO_BACKEND_CLIENT_ID,
         )
 
         with pytest.raises(ValueError):
             cognito.verify_cognito_token(token)
 
-    def test_wrong_client_id_is_rejected(self, signing_key_patch):
+    def test_legacy_fe_client_id_is_rejected(self, signing_key_patch):
+        """
+        CLIAR-162 Phase 7 최종 전환: 기존 FE App Client 토큰은 더 이상
+        허용하지 않는다(설정 자체도 함께 제거됨, app/core/config.py
+        참고). 프론트 인증 연동이 처음부터 없었음이 확인되어 과도기
+        dual-accept(Phase 7A)를 종료했다.
+        """
         token = _make_token(
             signing_key_patch,
             token_use="access",
-            client_id="some-other-client-id",
+            client_id=_LEGACY_FE_CLIENT_ID,
         )
+
+        with pytest.raises(ValueError):
+            cognito.verify_cognito_token(token)
+
+    def test_third_party_client_id_is_rejected(self, signing_key_patch):
+        token = _make_token(
+            signing_key_patch,
+            token_use="access",
+            client_id="some-attacker-controlled-client-id",
+        )
+
+        with pytest.raises(ValueError):
+            cognito.verify_cognito_token(token)
+
+    def test_backend_client_id_none_rejects_every_token(
+        self, signing_key_patch, monkeypatch
+    ):
+        """
+        COGNITO_BACKEND_CLIENT_ID가 배포 환경에 주입되지 않아 None이면
+        (autouse fixture를 이 테스트가 덮어씀), 어떤 client_id를 가진
+        토큰도 통과시키면 안 된다 — 설정 누락이 "아무 client_id나
+        허용"하는 인증 우회로 이어지지 않아야 한다.
+        """
+        monkeypatch.setattr(settings, "COGNITO_BACKEND_CLIENT_ID", None)
+        token = _make_token(
+            signing_key_patch,
+            token_use="access",
+            client_id="would-be-backend-client-id",
+        )
+
+        with pytest.raises(ValueError):
+            cognito.verify_cognito_token(token)
+
+    def test_backend_client_id_blank_string_rejects_every_token(
+        self, signing_key_patch, monkeypatch
+    ):
+        """
+        COGNITO_BACKEND_CLIENT_ID가 빈 문자열/공백뿐이면 그 값 자체를
+        허용 client_id로 취급하지 않는다. client_id claim이 빈
+        문자열인 토큰(비정상적인 형태)도 통과시키지 않는다.
+        """
+        monkeypatch.setattr(settings, "COGNITO_BACKEND_CLIENT_ID", "   ")
+        now = int(time.time())
+        payload = {
+            "sub": "cognito-sub-0001",
+            "token_use": "access",
+            "client_id": "",
+            "iss": cognito.COGNITO_ISSUER,
+            "iat": now,
+            "exp": now + 3600,
+        }
+        token = jwt.encode(payload, signing_key_patch, algorithm="RS256")
 
         with pytest.raises(ValueError):
             cognito.verify_cognito_token(token)
@@ -126,7 +201,7 @@ class TestVerifyCognitoTokenRejects:
         token = _make_token(
             signing_key_patch,
             token_use="access",
-            client_id=settings.COGNITO_CLIENT_ID,
+            client_id=settings.COGNITO_BACKEND_CLIENT_ID,
             exp_delta=-3600,
         )
 
@@ -137,7 +212,7 @@ class TestVerifyCognitoTokenRejects:
         token = _make_token(
             signing_key_patch,
             token_use="access",
-            client_id=settings.COGNITO_CLIENT_ID,
+            client_id=settings.COGNITO_BACKEND_CLIENT_ID,
             issuer="https://cognito-idp.ap-northeast-2.amazonaws.com/attacker-pool",
         )
 
@@ -154,7 +229,7 @@ class TestVerifyCognitoTokenRejects:
         now = int(time.time())
         payload = {
             "token_use": "access",
-            "client_id": settings.COGNITO_CLIENT_ID,
+            "client_id": settings.COGNITO_BACKEND_CLIENT_ID,
             "iss": cognito.COGNITO_ISSUER,
             "iat": now,
             "exp": now + 3600,
@@ -174,7 +249,7 @@ class TestVerifyCognitoTokenRejects:
         payload = {
             "sub": "attacker",
             "token_use": "access",
-            "client_id": settings.COGNITO_CLIENT_ID,
+            "client_id": settings.COGNITO_BACKEND_CLIENT_ID,
             "iss": cognito.COGNITO_ISSUER,
             "iat": now,
             "exp": now + 3600,
@@ -185,85 +260,98 @@ class TestVerifyCognitoTokenRejects:
             cognito.verify_cognito_token(token)
 
 
-class TestGetCognitoUserEmail:
+class TestRequiredClientId:
     """
-    Cognito GetUser 호출로 email을 얻는 get_cognito_user_email 테스트.
-
-    boto3 client 자체를 monkeypatch하여 실제 AWS/Cognito에 접속하지
-    않는다.
+    _required_client_id()(CLIAR-162 Phase 7 최종)의 순수 함수 단위
+    테스트. JWT/JWKS 없이 settings만으로 확인한다.
     """
 
-    def _patch_client(self, monkeypatch, fake_client):
-        monkeypatch.setattr(cognito, "get_cognito_idp_client", lambda: fake_client)
+    def test_returns_backend_client_id_when_configured(self, monkeypatch):
+        monkeypatch.setattr(settings, "COGNITO_BACKEND_CLIENT_ID", "backend-client")
 
-    def test_returns_email_from_user_attributes(self, monkeypatch):
-        class _FakeClient:
-            def get_user(self, AccessToken):
-                return {
-                    "UserAttributes": [
-                        {"Name": "sub", "Value": "cognito-sub-0001"},
-                        {"Name": "email", "Value": "user@example.com"},
-                        {"Name": "email_verified", "Value": "true"},
-                    ]
-                }
+        assert cognito._required_client_id() == "backend-client"
 
-        self._patch_client(monkeypatch, _FakeClient())
+    def test_returns_none_when_not_configured(self, monkeypatch):
+        monkeypatch.setattr(settings, "COGNITO_BACKEND_CLIENT_ID", None)
 
-        email = cognito.get_cognito_user_email("some-access-token")
+        assert cognito._required_client_id() is None
 
-        assert email == "user@example.com"
+    def test_returns_none_when_blank_string(self, monkeypatch):
+        monkeypatch.setattr(settings, "COGNITO_BACKEND_CLIENT_ID", "   ")
 
-    def test_missing_email_attribute_raises_value_error(self, monkeypatch):
-        class _FakeClient:
-            def get_user(self, AccessToken):
-                return {"UserAttributes": [{"Name": "sub", "Value": "cognito-sub-0001"}]}
+        assert cognito._required_client_id() is None
 
-        self._patch_client(monkeypatch, _FakeClient())
+    def test_reflects_current_settings_on_each_call(self, monkeypatch):
+        """
+        모듈 임포트 시점에 고정되지 않고, 호출할 때마다 현재
+        settings 값을 다시 읽어야 한다(재기동 없이 monkeypatch로
+        값이 바뀌면 즉시 반영되는지 확인).
+        """
+        monkeypatch.setattr(settings, "COGNITO_BACKEND_CLIENT_ID", None)
+        assert cognito._required_client_id() is None
 
-        with pytest.raises(ValueError):
-            cognito.get_cognito_user_email("some-access-token")
+        monkeypatch.setattr(settings, "COGNITO_BACKEND_CLIENT_ID", "backend-client")
+        assert cognito._required_client_id() == "backend-client"
 
-    def test_cognito_rejecting_token_raises_value_error(self, monkeypatch):
-        from botocore.exceptions import ClientError
 
-        class _FakeClient:
-            def get_user(self, AccessToken):
-                raise ClientError(
-                    {"Error": {"Code": "NotAuthorizedException", "Message": "Invalid token"}},
-                    "GetUser",
-                )
+class TestSecurityDependencyAcceptsBackendClientOnly:
+    """
+    CLIAR-162 Phase 7 최종: /users/me 등이 실제로 사용하는 FastAPI
+    dependency 체인(app/core/security.py의
+    _extract_and_verify_bearer_token -> get_current_user_id) 수준에서도
+    backend client_id 토큰만 통과하고, 기존 FE/제3자 client_id는
+    401이 되는지 확인한다.
 
-        self._patch_client(monkeypatch, _FakeClient())
+    dependency 함수를 FastAPI 없이 직접 호출한다 — security.py의
+    Header(default=None, ...) 파라미터는 명시적으로 문자열 인자를
+    넘기면 그대로 그 값이 쓰인다(FastAPI Depends() 경유 시에만 실제
+    요청 헤더로 채워지는 sentinel일 뿐이므로, 직접 호출에서는 일반
+    함수 인자와 동일하게 동작한다).
+    """
 
-        with pytest.raises(ValueError):
-            cognito.get_cognito_user_email("expired-or-revoked-token")
+    def test_backend_client_token_passes_get_current_user_id(
+        self, signing_key_patch
+    ):
+        token = _make_token(
+            signing_key_patch,
+            token_use="access",
+            client_id=settings.COGNITO_BACKEND_CLIENT_ID,
+            sub="cognito-sub-0001",
+        )
 
-    def test_cognito_service_error_raises_runtime_error(self, monkeypatch):
-        from botocore.exceptions import ClientError
+        verified = security._extract_and_verify_bearer_token(f"Bearer {token}")
+        user_id = security.get_current_user_id(verified)
 
-        class _FakeClient:
-            def get_user(self, AccessToken):
-                raise ClientError(
-                    {"Error": {"Code": "InternalErrorException", "Message": "boom"}},
-                    "GetUser",
-                )
+        assert user_id == "cognito-sub-0001"
 
-        self._patch_client(monkeypatch, _FakeClient())
+    def test_legacy_fe_client_token_raises_401(self, signing_key_patch):
+        from fastapi import HTTPException
 
-        with pytest.raises(RuntimeError):
-            cognito.get_cognito_user_email("some-access-token")
+        token = _make_token(
+            signing_key_patch,
+            token_use="access",
+            client_id=_LEGACY_FE_CLIENT_ID,
+            sub="cognito-sub-0002",
+        )
 
-    def test_network_failure_raises_runtime_error(self, monkeypatch):
-        from botocore.exceptions import EndpointConnectionError
+        with pytest.raises(HTTPException) as exc_info:
+            security._extract_and_verify_bearer_token(f"Bearer {token}")
 
-        class _FakeClient:
-            def get_user(self, AccessToken):
-                raise EndpointConnectionError(endpoint_url="https://cognito-idp.example.com")
+        assert exc_info.value.status_code == 401
 
-        self._patch_client(monkeypatch, _FakeClient())
+    def test_unknown_client_token_raises_401(self, signing_key_patch):
+        from fastapi import HTTPException
 
-        with pytest.raises(RuntimeError):
-            cognito.get_cognito_user_email("some-access-token")
+        token = _make_token(
+            signing_key_patch,
+            token_use="access",
+            client_id="some-attacker-controlled-client-id",
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            security._extract_and_verify_bearer_token(f"Bearer {token}")
+
+        assert exc_info.value.status_code == 401
 
 
 class TestDeleteCognitoUser:

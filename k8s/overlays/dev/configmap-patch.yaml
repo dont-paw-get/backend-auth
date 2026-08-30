@@ -6,4 +6,22 @@ metadata:
 data:
   APP_ENV: "development"
   COGNITO_USER_POOL_ID: "ap-northeast-2_y1mKz50El"
-  COGNITO_CLIENT_ID: "245uq1begv38q4ij0a743lgmhb"
+  # CLIAR-162 Phase 7 최종 전환: 기존 FE App Client(COGNITO_CLIENT_ID)
+  # 설정은 여기서 제거되었다 — 프론트 인증이 Cognito/backend-auth와
+  # 전혀 연동된 적이 없음이 확인되어, app/core/config.py에서도 이
+  # 설정 자체를 더 이상 읽지 않는다(과도기 dual-accept였던 Phase 7A
+  # 종료). base ConfigMap에는 이 키의 placeholder 값이 여전히 남아
+  # 있을 수 있으나(k8s/base/configmap.yaml, 이번 Phase에서는 건드리지
+  # 않음), 애플리케이션은 이를 읽지 않으므로 무해하다.
+  # 신규 backend 전용 App Client(secret 있음, CLIAR-148/153). Client
+  # ID 자체는 비밀값이 아니므로 Secret이 아닌 ConfigMap에 둔다. 실제
+  # secret(COGNITO_BACKEND_CLIENT_SECRET)은 backend-auth-secret에
+  # 별도로 주입해야 한다(k8s/secret.example.yaml 참고, Phase 7C 전
+  # 필수 — 이 secret이 없으면 login/signup 등이 RuntimeError로 실패).
+  COGNITO_BACKEND_CLIENT_ID: "du6sabh7hm17goodv6sd2n9ag"
+  # CloudFront(https://d1wab52ln5by5k.cloudfront.net/api/*)가
+  # backend-auth DEV ALB로 same-origin 라우팅되도록 구성되어, 브라우저는
+  # 항상 HTTPS로 auth API를 호출한다. 이제 Secure 쿠키가 정상 저장되므로
+  # base 기본값(True)과 동일하게 명시적으로 true로 둔다(과거 ALB
+  # HTTP:80 직접 노출 시절의 임시 비활성화는 종료).
+  COOKIE_SECURE: "true"

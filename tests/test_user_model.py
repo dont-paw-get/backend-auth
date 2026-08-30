@@ -6,7 +6,7 @@ User 모델(테이블명 member) 테스트.
 컬럼 제약조건(NOT NULL / UNIQUE / PK / default)이 정의대로 동작하는지 검증한다.
 
 CLIAR-87: member_id(UUID)가 새 UNIQUE 식별자이며, 내부 PK는 id(BIGINT)이다.
-status는 MemberStatus ENUM(ACTIVE/WITHDRAWN)이고, nickname UNIQUE는 제거되었으며,
+status는 MemberStatus ENUM(PENDING/ACTIVE/WITHDRAWN)이고, nickname UNIQUE는 제거되었으며,
 약관 관련 컬럼(agree_terms 등)은 더 이상 이 테이블에 존재하지 않는다.
 """
 
@@ -78,10 +78,22 @@ class TestUserTableDefinition:
         assert column.nullable is False
         assert column.unique is True
 
-    def test_email_is_not_null_and_unique(self):
+    def test_email_is_not_null_and_not_globally_unique_at_column_level(self):
+        """
+        CLIAR-177: email은 더 이상 column-level UNIQUE가 아니다.
+
+        탈퇴 완료(deleted_at IS NOT NULL)된 회원의 이메일은 재가입을
+        허용해야 하므로, "현재 유효한 회원"만을 대상으로 하는 partial
+        unique index(uq_member_email_active, WHERE deleted_at IS
+        NULL)로 대신 강제한다. 이 index는 app/models/terms.py의
+        uk_terms_active_code와 동일한 이유로 Alembic migration
+        (alembic/versions/205eb1a0a7eb_*.py)에서만 정의하며 ORM
+        모델에는 선언하지 않으므로, SQLAlchemy의 Column.unique는 여기서
+        항상 None/False다.
+        """
         column = User.__table__.c.email
         assert column.nullable is False
-        assert column.unique is True
+        assert not column.unique
 
     def test_nickname_is_not_null_and_not_unique(self):
         """CLIAR-87: nickname UNIQUE 제약은 제거되어 중복을 허용한다."""
@@ -126,13 +138,39 @@ class TestUserPersistence:
         assert fetched.status == MemberStatus.ACTIVE
         assert fetched.profile_image_url is None
 
-    def test_email_uniqueness_is_enforced(self, db_session):
-        db_session.add(_make_user(nickname="nick-1"))
+    def test_same_email_can_exist_across_multiple_withdrawn_rows(self, db_session):
+        """
+        CLIAR-177: 탈퇴 완료(deleted_at 설정됨)된 회원이 여러 명 같은
+        이메일을 거쳐갈 수 있어야 하므로, 이 조합은 더 이상 DB
+        column-level 제약 위반이 아니다.
+
+        "deleted_at IS NULL인 행은 이메일당 최대 1개"라는 실제
+        불변조건은 (1) app/repositories/user_repository.py의
+        get_by_email/exists_by_email을 통한 애플리케이션 사전 검사와
+        (2) Postgres partial unique index(uq_member_email_active,
+        migration 205eb1a0a7eb)가 함께 보장한다 — SQLite는 partial
+        unique index를 이 테스트 환경에서 동일하게 재현하지 못하므로
+        (2)는 여기서 검증하지 않는다(DEV PostgreSQL에서 실제 migration
+        적용 확인 필요, 최종 보고 참고).
+        """
+        first = _make_user(
+            nickname="nick-1",
+            status=MemberStatus.WITHDRAWN,
+            deleted_at=datetime.now(timezone.utc),
+        )
+        second = _make_user(
+            nickname="nick-2",
+            status=MemberStatus.WITHDRAWN,
+            deleted_at=datetime.now(timezone.utc),
+        )
+        db_session.add(first)
         db_session.commit()
 
-        db_session.add(_make_user(email="user@example.com", nickname="nick-2"))
-        with pytest.raises(IntegrityError):
-            db_session.commit()
+        db_session.add(second)
+        db_session.commit()  # 예외가 발생하지 않아야 한다.
+
+        count = db_session.query(User).filter(User.email == "user@example.com").count()
+        assert count == 2
 
     def test_nickname_can_be_duplicated(self, db_session):
         """CLIAR-87: nickname 중복은 더 이상 DB 제약 위반이 아니다."""

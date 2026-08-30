@@ -41,6 +41,29 @@ def get_jwk_client() -> PyJWKClient:
     return PyJWKClient(JWKS_URL)
 
 
+def _required_client_id() -> str | None:
+    """
+    verify_cognito_token()이 요구하는 client_id를 계산한다
+    (CLIAR-162, Phase 7 최종: backend App Client만 허용).
+
+    최종 정책: settings.COGNITO_BACKEND_CLIENT_ID 하나만 허용한다.
+    기존 FE App Client(COGNITO_CLIENT_ID)는 더 이상 허용하지 않는다 —
+    Phase 7A의 과도기 dual-accept는 프론트가 Cognito/backend-auth
+    인증을 전혀 연동한 적이 없음이 확인되어 이 Phase에서 종료됐다.
+
+    COGNITO_BACKEND_CLIENT_ID가 None이거나 빈 문자열/공백뿐이면
+    (배포 환경변수 누락) None을 반환한다. 호출자는 이 경우 무조건
+    거부해야 한다 — "설정이 비어 있으니 아무 client_id나 통과"시키는
+    인증 우회를 절대 만들지 않기 위해서다. 매 호출마다 settings에서
+    다시 읽으므로(모듈 임포트 시점에 고정하지 않음), 배포 환경변수가
+    바뀌면 재기동 후 즉시 반영된다.
+    """
+    client_id = settings.COGNITO_BACKEND_CLIENT_ID
+    if client_id is None or not client_id.strip():
+        return None
+    return client_id
+
+
 def verify_cognito_token(token: str) -> dict:
     """
     Cognito Access Token 검증.
@@ -50,7 +73,8 @@ def verify_cognito_token(token: str) -> dict:
     - issuer
     - token expiration
     - token_use == "access" (ID Token 거절)
-    - client_id가 현재 Cognito App Client(COGNITO_CLIENT_ID)와 일치
+    - client_id가 신규 backend App Client(COGNITO_BACKEND_CLIENT_ID)와
+      일치 (_required_client_id() 참고, CLIAR-162 Phase 7 최종 전환)
 
     Cognito Access Token은 ID Token과 달리 표준 "aud" claim이 아니라
     "client_id" claim으로 발급 대상 앱 클라이언트를 나타내므로,
@@ -87,7 +111,8 @@ def verify_cognito_token(token: str) -> dict:
     if payload.get("token_use") != "access":
         raise ValueError("Only Cognito Access Tokens are accepted (token_use must be 'access')")
 
-    if payload.get("client_id") != settings.COGNITO_CLIENT_ID:
+    required_client_id = _required_client_id()
+    if required_client_id is None or payload.get("client_id") != required_client_id:
         raise ValueError("Token was not issued for this Cognito App Client")
 
     if not payload.get("sub"):
@@ -108,44 +133,6 @@ def get_cognito_idp_client():
     import boto3
 
     return boto3.client("cognito-idp", region_name=settings.AWS_REGION)
-
-
-def get_cognito_user_email(access_token: str) -> str:
-    """
-    검증된 Cognito Access Token으로 GetUser를 호출해 email 속성을 얻는다.
-
-    client body의 email을 신뢰하지 않고, Cognito가 실제로 보관 중인
-    사용자 속성만을 신뢰된 email로 사용한다. GetUser가 토큰을 거절하면
-    (만료/폐기 등) ValueError를 던져 호출자가 401로 매핑할 수 있게
-    하고, Cognito와의 통신 자체가 실패하면(네트워크/일시 장애)
-    RuntimeError를 던져 호출자가 5xx로 매핑할 수 있게 한다.
-    """
-    from botocore.exceptions import ClientError, EndpointConnectionError
-
-    client = get_cognito_idp_client()
-
-    try:
-        response = client.get_user(AccessToken=access_token)
-    except ClientError as e:
-        error_code = e.response.get("Error", {}).get("Code", "")
-        if error_code in {
-            "NotAuthorizedException",
-            "UserNotFoundException",
-            "InvalidParameterException",
-        }:
-            raise ValueError("Cognito rejected the access token") from e
-        # 그 외(서비스 장애, throttling 등)는 서버 측 문제로 취급한다.
-        raise RuntimeError("Cognito GetUser call failed") from e
-    except EndpointConnectionError as e:
-        raise RuntimeError("Could not reach Cognito") from e
-
-    for attribute in response.get("UserAttributes", []):
-        if attribute.get("Name") == "email":
-            email = attribute.get("Value")
-            if email:
-                return email
-
-    raise ValueError("Cognito user has no email attribute")
 
 
 def delete_cognito_user(access_token: str, *, sub: str) -> None:
