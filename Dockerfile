@@ -10,12 +10,14 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# psycopg 등 빌드에 필요한 시스템 패키지
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
 # 의존성 먼저 설치 (레이어 캐시 활용)
+#
+# build-essential / libpq-dev 는 설치하지 않습니다. requirements.txt 의 모든
+# 패키지가 amd64/aarch64 wheel 을 제공해(psycopg[binary] 는 libpq 를 wheel 에
+# 번들) 소스 컴파일이 전혀 없기 때문입니다. 이 apt 설치는 arm64 를 QEMU 로
+# 에뮬레이션하는 멀티아키 빌드에서 가장 비싼 단계였습니다. wheel 이 없는
+# 패키지를 나중에 추가하면 pip install 이 CI 에서 실패하므로, 그때 이 설치를
+# 되살리면 됩니다.
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
