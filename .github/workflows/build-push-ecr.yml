@@ -36,41 +36,65 @@ jobs:
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      # 멀티아키(linux/amd64 + linux/arm64) 빌드를 위한 준비.
+      # prod 클러스터는 노드가 전부 arm64(Graviton) 이고 dev 는 amd64/arm64 가
+      # 섞여 있는데, NodePool 에 아키텍처 제약이 없어 Karpenter 가 어느 쪽이든
+      # 띄울 수 있습니다. 단일 아키 이미지는 pull 은 성공하고 실행 시점에
+      # "exec format error" 로 죽으므로 두 아키를 모두 빌드해야 합니다.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       # 브랜치별로 대상 ECR 리포/overlay/환경명을 결정합니다.
-      #   develop → dev  (dpyb-dev/dpyb-auth,  MUTABLE  → main-latest 등 movable 태그 OK)
+      #   develop → dev  (dpyb-dev/dpyb-auth,  MUTABLE  → <branch>-latest 등 movable 태그 OK)
       #   main    → prod (dpyb-prod/dpyb-auth, IMMUTABLE → 커밋 SHA 태그만 push)
+      # push 할 태그도 여기서 전부 계산합니다. buildx 멀티플랫폼 빌드는 결과를
+      # 로컬 데몬에 남기지 않아 나중에 `docker tag` 로 태그를 덧붙일 수 없고,
+      # 빌드 시점에 태그 목록을 전부 넘겨야 하기 때문입니다.
       - name: Resolve target by branch
         id: target
-        run: |
-          if [ "${{ github.ref_name }}" = "main" ]; then
-            echo "env=prod"                                >> "$GITHUB_OUTPUT"
-            echo "ecr_repository=dpyb-prod/dpyb-auth"      >> "$GITHUB_OUTPUT"
-            echo "overlay=k8s/overlays/prod/kustomization.yaml" >> "$GITHUB_OUTPUT"
-            echo "immutable=true"                          >> "$GITHUB_OUTPUT"
-          else
-            echo "env=dev"                                 >> "$GITHUB_OUTPUT"
-            echo "ecr_repository=dpyb-dev/dpyb-auth"       >> "$GITHUB_OUTPUT"
-            echo "overlay=k8s/overlays/dev/kustomization.yaml"  >> "$GITHUB_OUTPUT"
-            echo "immutable=false"                         >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Build & push image
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ steps.target.outputs.ecr_repository }}
-          IMMUTABLE: ${{ steps.target.outputs.immutable }}
           IMAGE_TAG: ${{ github.sha }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          # 커밋 SHA 태그는 항상 빌드 (immutable/mutable 공통, 실제 배포에 쓰는 태그)
-          docker build -t "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" .
-          docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-          # movable 태그(<branch>-latest)는 MUTABLE 리포(dev)에서만 사용.
-          # IMMUTABLE 리포(prod)는 같은 태그 재push 가 실패하므로 건너뜀.
-          if [ "$IMMUTABLE" != "true" ]; then
-            MOVABLE="$REGISTRY/$ECR_REPOSITORY:${{ github.ref_name }}-latest"
-            docker tag "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" "$MOVABLE"
-            docker push "$MOVABLE"
+          if [ "$REF_NAME" = "main" ]; then
+            ENV_NAME=prod; ECR_REPOSITORY=dpyb-prod/dpyb-auth
+            OVERLAY=k8s/overlays/prod/kustomization.yaml; IMMUTABLE=true
+          else
+            ENV_NAME=dev;  ECR_REPOSITORY=dpyb-dev/dpyb-auth
+            OVERLAY=k8s/overlays/dev/kustomization.yaml;  IMMUTABLE=false
           fi
+          {
+            echo "env=${ENV_NAME}"
+            echo "ecr_repository=${ECR_REPOSITORY}"
+            echo "overlay=${OVERLAY}"
+            echo "immutable=${IMMUTABLE}"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "tags<<TAGS_EOF"
+            echo "${REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+            if [ "$IMMUTABLE" != "true" ]; then
+              echo "${REGISTRY}/${ECR_REPOSITORY}:${REF_NAME}-latest"
+            fi
+            echo "TAGS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # 태그 목록은 target 스텝이 계산합니다. 커밋 SHA 태그는 항상 포함되고,
+      # movable 태그(<branch>-latest)는 MUTABLE 리포(dev)에서만 붙습니다 —
+      # IMMUTABLE 리포(prod)는 같은 태그 재push 가 실패하기 때문입니다.
+      # provenance: false — attestation 매니페스트가 붙으면 ECR 콘솔과 일부
+      # 툴에서 unknown/unknown 아키텍처 항목으로 보입니다.
+      - name: Build & push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.target.outputs.tags }}
+          provenance: false
 
       - name: Bump overlay image tag (GitOps)
         env:
