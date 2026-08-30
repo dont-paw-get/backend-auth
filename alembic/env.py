@@ -38,8 +38,16 @@ config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 target_metadata = Base.metadata
 
 # backend-auth uses its own Alembic version table instead of the default
-# "alembic_version" so that multiple services sharing the same Aurora
-# PostgreSQL database do not collide on migration history.
+# "alembic_version". The original reason was that three services shared a
+# single "dpyb" database on the dev Aurora cluster and would otherwise have
+# collided on migration history. Since 2026-08-30 dev is split per service
+# (backend-auth -> "dpyb_auth", see docs/db-per-service.md), so that
+# collision can no longer happen.
+#
+# The name is kept anyway, and must not be changed: the split was done by
+# copying this table into the new database, and both dev and prod track
+# their history under this name. Renaming it would make Alembic see an
+# empty history and re-run every migration against a populated database.
 VERSION_TABLE = "alembic_version_auth"
 
 # other values from the config, defined by the needs of env.py,

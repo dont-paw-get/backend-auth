@@ -97,7 +97,7 @@ argocd/
 kubectl create namespace dpyb-auth-dev
 kubectl create secret generic backend-auth-secret \
   --namespace dpyb-auth-dev \
-  --from-literal=DATABASE_URL='postgresql+psycopg://user:pass@dev-rds-host:5432/db'
+  --from-literal=DATABASE_URL='postgresql+psycopg://user:pass@dev-rds-host:5432/dpyb_auth'
 
 # 2) ArgoCD Application 등록 (이후는 GitOps 자동)
 kubectl apply -f argocd/application-dev.yaml
@@ -111,7 +111,7 @@ kubectl get pods,svc,ingress -n dpyb-auth-dev
 kubectl create namespace dpyb-auth
 kubectl create secret generic backend-auth-secret \
   --namespace dpyb-auth \
-  --from-literal=DATABASE_URL='postgresql+psycopg://user:pass@prod-rds-host:5432/db'
+  --from-literal=DATABASE_URL='postgresql+psycopg://user:pass@prod-rds-host:5432/dpyb_auth'
 kubectl apply -f argocd/application-prod.yaml
 kubectl get pods,svc,ingress -n dpyb-auth
 -->
