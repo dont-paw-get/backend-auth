@@ -3,6 +3,7 @@ kind: Kustomization
 
 # 공통 매니페스트. 네임스페이스/이미지태그/환경별 값은 overlay 에서 주입합니다.
 resources:
+  - serviceaccount.yaml
   - configmap.yaml
   - deployment.yaml
   - service.yaml
