@@ -15,6 +15,9 @@ spec:
       labels:
         app.kubernetes.io/name: backend-auth
     spec:
+      # IRSA 대상 SA. 어노테이션(role-arn)은 overlay 에서 환경별로 주입합니다.
+      # (k8s/base/serviceaccount.yaml / docs/auth-architecture.md §8.2)
+      serviceAccountName: backend-auth
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
