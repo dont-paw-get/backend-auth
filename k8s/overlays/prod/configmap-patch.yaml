@@ -5,6 +5,23 @@ metadata:
   name: backend-auth-config
 data:
   APP_ENV: "production"
-  # TODO: 상용용 Cognito User Pool / Client 실제 값으로 교체하세요. (아래는 placeholder)
-  COGNITO_USER_POOL_ID: "ap-northeast-2_PRODxxxxx"
-  COGNITO_CLIENT_ID: "prod-client-id-xxxxxxxx"
+  # CLIAR-183: prod User Pool / backend App Client 실제 생성 완료.
+  # (docs/auth-architecture.md §8.1 사양대로 dev와 동일 설정으로 생성)
+  COGNITO_USER_POOL_ID: "ap-northeast-2_v5UmqpECS"
+  # 신규 backend 전용 App Client(secret 있음). Client ID 자체는 비밀값이
+  # 아니므로 Secret이 아닌 ConfigMap에 둔다. 실제 secret
+  # (COGNITO_BACKEND_CLIENT_SECRET)은 backend-auth-secret에 별도로 주입해야
+  # 한다 — 없으면 /auth/login 과 쿠키 /auth/refresh 가 secret_hash() 의
+  # RuntimeError 로 500 이 된다.
+  COGNITO_BACKEND_CLIENT_ID: "3l3m4q175dh6l8u1iuksfp66d2"
+  # 기존 FE App Client 설정(COGNITO_CLIENT_ID)은 여기서 제거했다 —
+  # CLIAR-162 Phase 7 이후 app/core/config.py 가 이 키를 읽지 않는다
+  # (dev overlay 와 동일한 처리). base ConfigMap 의 placeholder 값이
+  # 그대로 흘러오지만 애플리케이션이 읽지 않으므로 무해하다.
+  #
+  # TODO(CLIAR-183): CORS_ALLOWED_ORIGINS 는 아직 주입하지 않았다. prod FE
+  # 오리진이 존재하지 않기 때문이다(CloudFront 배포가 dev 하나뿐이고 prod
+  # ALB 는 도메인 없이 HTTP:80 으로만 노출돼 있다). prod FE 가 배포되면
+  # 그 오리진을 여기에 명시해야 한다 — 비어 있으면 cross-origin 요청이
+  # 전혀 허용되지 않는다. 와일드카드는 allow_credentials=true 와 함께
+  # 쓸 수 없다.
