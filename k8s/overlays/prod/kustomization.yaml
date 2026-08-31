@@ -25,3 +25,5 @@ patches:
   - path: configmap-patch.yaml
   # 상용은 auth 전용 노드그룹(label workload=auth / taint dedicated=auth)에만 배치
   - path: nodepin-patch.yaml
+  # IRSA 롤 ARN 주입 (CLIAR-183 에서 롤 생성 완료)
+  - path: serviceaccount-patch.yaml
