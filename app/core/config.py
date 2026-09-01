@@ -59,6 +59,21 @@ class Settings(BaseSettings):
     RATE_LIMIT_SIGNUP: str = "5/minute"
     RATE_LIMIT_PASSWORD: str = "5/minute"
 
+    # 관측(app/core/logging_config.py): stdout -> Grafana Alloy -> Loki.
+    #
+    # LOG_FORMAT은 "json"(기본, 수집용)과 "text"(로컬 개발용 사람이
+    # 읽는 형식) 중 하나다. 어느 쪽이든 민감정보 마스킹은 동일하게
+    # 적용된다.
+    #
+    # 분산 추적 설정(OTEL_SERVICE_NAME / OTEL_EXPORTER_OTLP_ENDPOINT /
+    # OTEL_RESOURCE_ATTRIBUTES)은 의도적으로 여기에 두지 않는다.
+    # OpenTelemetry SDK가 그 표준 환경변수들을 직접 읽으며
+    # (app/core/tracing.py), Settings에 중복 정의하면 "SDK가 읽는 값"과
+    # "우리가 읽는 값"이 어긋날 수 있다. model_config의 extra="ignore"
+    # 덕분에 OTEL_* 환경변수가 주입돼도 Settings 생성에는 영향이 없다.
+    LOG_LEVEL: str = "INFO"
+    LOG_FORMAT: str = "json"
+
     @property
     def cors_allowed_origins_list(self) -> list[str]:
         """

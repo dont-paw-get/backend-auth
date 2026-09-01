@@ -25,3 +25,22 @@ data:
   # 그 오리진을 여기에 명시해야 한다 — 비어 있으면 cross-origin 요청이
   # 전혀 허용되지 않는다. 와일드카드는 allow_credentials=true 와 함께
   # 쓸 수 없다.
+
+  # ---- 관측 (app/core/tracing.py) ----
+  #
+  # deployment.environment.name 은 Tempo/Loki 에서 dev·prod 텔레메트리를
+  # 구분하는 표준 리소스 속성이다. service.name 은 base 의
+  # OTEL_SERVICE_NAME("backend-auth")에서 온다.
+  OTEL_RESOURCE_ATTRIBUTES: "deployment.environment.name=prod"
+  #
+  # TODO: OpenTelemetry Collector 주소를 주입해야 tracing 이 켜진다.
+  # collector 는 이 저장소가 아니라 dpgy-infra 가 소유하므로
+  # (docs/production_architecture.md §9), 실제 Service DNS 를 확인한 뒤
+  # 아래 주석을 풀어 채운다. 값이 비어 있는 동안 애플리케이션은 tracing
+  # 없이 정상 동작한다(구조화 로그는 그와 무관하게 이미 나간다).
+  # 포트는 OTLP http/protobuf 수신 포트(기본 4318)여야 한다.
+  #
+  # prod 는 replicas 2 이므로 두 파드가 같은 service.name 으로 텔레메트리를
+  # 보낸다. 파드 구분은 SDK 가 자동으로 넣는 service.instance.id 로 된다.
+  #
+  # OTEL_EXPORTER_OTLP_ENDPOINT: "http://<collector-service>.<namespace>.svc.cluster.local:4318"
