@@ -33,11 +33,20 @@ data:
   # OTEL_SERVICE_NAME("backend-auth")에서 온다.
   OTEL_RESOURCE_ATTRIBUTES: "deployment.environment.name=dev"
   #
-  # TODO: OpenTelemetry Collector 주소를 주입해야 tracing 이 켜진다.
-  # collector 는 이 저장소가 아니라 dpgy-infra 가 소유하므로
-  # (docs/production_architecture.md §9), 실제 Service DNS 를 확인한 뒤
-  # 아래 주석을 풀어 채운다. 값이 비어 있는 동안 애플리케이션은 tracing
-  # 없이 정상 동작한다(구조화 로그는 그와 무관하게 이미 나간다).
-  # 포트는 OTLP http/protobuf 수신 포트(기본 4318)여야 한다.
+  # OpenTelemetry Collector (dpgy-infra 소유, docs/production_architecture.md §9).
+  # dev 클러스터에서 이 Service DNS 로 OTLP HTTP 수신이 동작하는 것을 확인했다.
+  # 이 값이 주입되는 순간 app/core/tracing.py 가 TracerProvider + OTLP
+  # http/protobuf exporter 를 켠다(값이 없으면 tracing 전체가 꺼진 채 동작).
   #
-  # OTEL_EXPORTER_OTLP_ENDPOINT: "http://<collector-service>.<namespace>.svc.cluster.local:4318"
+  # 포트 4318 = OTLP http/protobuf 수신 포트. exporter 는 이 base endpoint 뒤에
+  # /v1/traces 를 자동으로 붙인다(경로를 여기 쓰지 않는다). 4317(gRPC)를
+  # 가리키면 export 가 실패한다.
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.monitoring.svc.cluster.local:4318"
+  #
+  # dev 는 트레이스 검증이 목적이므로 전량 샘플링한다. ratio 방식으로 두어
+  # prod 확장 시 SAMPLER_ARG 만 낮추면 되도록 한다(코드 변경 없음). ARG=1.0
+  # 은 100%. 상위 traceparent 의 sampled 결정은 parentbased 가 존중한다.
+  # app/core/tracing.py 는 sampler 를 코드에 넣지 않고 이 두 표준 환경변수를
+  # SDK 가 읽게 한다.
+  OTEL_TRACES_SAMPLER: "parentbased_traceidratio"
+  OTEL_TRACES_SAMPLER_ARG: "1.0"

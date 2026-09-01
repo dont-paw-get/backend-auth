@@ -306,7 +306,7 @@ CI 는 GitHub Secrets 의 AWS 액세스 키로 인증한다(OIDC 아님).
 | 항목 | 상태 |
 |---|---|
 | stdout JSON 구조화 로그 (-> Alloy -> Loki) | **적용됨** |
-| OpenTelemetry 분산 추적 (-> OTLP -> Collector -> Tempo) | **코드 적용됨**, collector 주소 주입 대기 |
+| OpenTelemetry 분산 추적 (-> OTLP -> Collector -> Tempo) | **dev 적용됨** (`otel-collector.monitoring:4318`), prod 는 collector 주소 주입 대기 |
 | `/actuator/prometheus` 대응 메트릭 + `ServiceMonitor` CR | 미적용 |
 
 로깅·추적의 구현과 운영 방법은 `docs/observability.md` 에 있다. 요약하면,
@@ -314,8 +314,10 @@ CI 는 GitHub Secrets 의 AWS 액세스 키로 인증한다(OIDC 아님).
 - 로그는 `app/core/logging_config.py` 가 stdout 에 한 줄 JSON 으로 내보낸다.
   파드 stdout 을 Alloy 가 수집하므로 앱 쪽 추가 설정은 없다.
 - 추적은 `app/core/tracing.py` 가 담당하며, `OTEL_EXPORTER_OTLP_ENDPOINT`
-  가 주입된 환경에서만 켜진다. 아직 dev·prod configmap 에 이 값이
-  없으므로(collector 주소 미확인) 현재는 로그만 나가고 있다.
+  가 주입된 환경에서만 켜진다. dev overlay 에는 이 값이 주입돼 있어
+  (`http://otel-collector.monitoring.svc.cluster.local:4318`, `OTEL_TRACES_SAMPLER`
+  `parentbased_traceidratio`/`1.0` = 전량) trace 가 Tempo 로 나간다.
+  prod overlay 는 아직 주소 미확인이라 로그만 나간다.
 - 메트릭은 여전히 미적용이다.
 
 ---

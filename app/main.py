@@ -42,7 +42,8 @@ def configure_cors(app: FastAPI) -> None:
 #   uvicorn이 이 모듈을 import한 뒤에 실행되므로, uvicorn이 미리 달아둔
 #   평문 핸들러를 걷어내고 로그 스트림을 하나로 통일할 수 있다.
 # configure_tracing(): OTLP endpoint가 주입된 환경에서만 TracerProvider와
-#   라이브러리 instrumentation(botocore/sqlalchemy/httpx/urllib)을 켠다.
+#   라이브러리 instrumentation(botocore/sqlalchemy/urllib)을 켠다. FastAPI
+#   inbound 계측만은 app 객체가 필요하므로 아래 instrument_app(app)에서 한다.
 #   실패하더라도 예외를 밖으로 내보내지 않으므로 기동이 막히지 않는다.
 configure_logging()
 configure_tracing()

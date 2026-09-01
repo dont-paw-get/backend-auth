@@ -172,6 +172,11 @@ def configure_tracing() -> bool:
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
+        # sampler를 명시적으로 넘기지 않는다 — SDK가 표준 환경변수
+        # OTEL_TRACES_SAMPLER / OTEL_TRACES_SAMPLER_ARG를 읽어 구성한다
+        # (기본값 parentbased_always_on = 전량). dev는 configmap에서
+        # parentbased_traceidratio + 1.0(=100%)을 주입하고, prod로
+        # 넘길 때 ARG만 낮추면 코드 변경 없이 샘플링율이 바뀐다.
         provider = TracerProvider(resource=_build_resource())
         # BatchSpanProcessor: export는 백그라운드 스레드에서 수행되며
         # 큐가 가득 차면 span을 드롭한다. collector가 죽어도 요청

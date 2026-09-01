@@ -92,6 +92,20 @@ uvicorn 은 애플리케이션 모듈을 import 하기 전에 자기 로거에 �
 
 **endpoint 는 코드 어디에도 하드코딩되어 있지 않다.**
 
+현재 주입 현황:
+
+| 환경 | `OTEL_EXPORTER_OTLP_ENDPOINT` | 샘플링 (`OTEL_TRACES_SAMPLER` / `_ARG`) |
+|---|---|---|
+| dev | `http://otel-collector.monitoring.svc.cluster.local:4318` | `parentbased_traceidratio` / `1.0` (전량) |
+| prod | 미주입 — collector 주소 확인 후 `k8s/overlays/prod/configmap-patch.yaml` 에 추가 | (주입 시 결정) |
+
+`app/core/tracing.py` 는 `TracerProvider` 에 sampler 를 넘기지 않는다 —
+SDK 가 표준 환경변수 `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` 를
+읽어 구성한다(기본값 `parentbased_always_on`). dev 는 트레이스 검증이
+목적이라 `parentbased_traceidratio` + `ARG=1.0`(=100%)으로 둔다. ratio
+방식이라 prod 로 확장할 때 `_ARG` 만 낮추면 코드 변경 없이 샘플링율이
+바뀐다. `parentbased_*` 는 상위 `traceparent` 의 sampled 결정을 존중한다.
+
 ### 환경변수
 
 ```
@@ -418,21 +432,30 @@ stdout 을 수집하도록 되어 있으면 그대로 들어온다. Loki 쪽에�
 - 라벨 카디널리티 주의: `trace_id` 는 라벨이 아니라 구조화 메타데이터로
   두어야 한다.
 
-### 트레이스 (collector 주소 주입 필요)
+### 트레이스 (collector 주소 주입)
 
 1. **OpenTelemetry Collector** 의 `otlp` receiver 에서 **HTTP(4318)** 를
    활성화한다. 앱은 http/protobuf 로 보낸다.
 2. collector Service 의 DNS 를 확인해 configmap 에 주입한다.
-   `k8s/overlays/{dev,prod}/configmap-patch.yaml` 에 주석 처리된
-   `OTEL_EXPORTER_OTLP_ENDPOINT` 줄을 풀고 실제 주소를 넣으면 된다.
+   `k8s/overlays/{dev,prod}/configmap-patch.yaml` 의
+   `OTEL_EXPORTER_OTLP_ENDPOINT` 에 실제 주소를 넣는다. 경로 없이
+   `:4318` 까지만 쓴다 — exporter 가 `/v1/traces` 를 자동으로 붙인다.
 
    ```yaml
-   OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318"
+   OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.monitoring.svc.cluster.local:4318"
    ```
 
-   이 값이 들어가기 전까지 tracing 은 꺼진 채로 동작한다(로그는 정상).
+   **dev 는 주입 완료.** prod 는 collector 주소 확인 후 추가한다. 이 값이
+   없는 환경은 tracing 이 꺼진 채로 동작한다(로그는 정상).
+
+   > 이 ConfigMap 은 `configMapGenerator` 가 아니라 이름 고정 리소스라
+   > 해시 suffix 가 붙지 않는다. 즉 값만 바꿔서는 실행 중 파드가
+   > 재기동되지 않는다. 다음 이미지 태그 bump(CI 가 develop 머지 시
+   > 커밋)로 rollout 될 때 반영되며, 즉시 반영하려면
+   > `kubectl -n dpyb-auth-dev rollout restart deploy/backend-auth`.
 3. NetworkPolicy 가 있다면 `dpyb-auth-dev` / `dpyb-auth` 네임스페이스에서
-   collector 네임스페이스로 나가는 트래픽을 허용한다.
+   collector 네임스페이스(`monitoring`)로 나가는 4318 트래픽을 허용한다.
+   (dev 는 OTLP HTTP 수신이 정상 동작함을 확인했다.)
 4. collector 의 `otlp` exporter 를 Tempo 로 연결한다.
 5. Grafana 에서 Tempo 데이터소스에 **trace-to-logs** 설정을 추가해
    `service.name` 과 `trace_id` 로 Loki 를 역참조하게 한다.

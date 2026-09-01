@@ -37,6 +37,9 @@ boto3==1.35.75
 #
 # opentelemetry-api/sdk(1.x)와 instrumentation(0.xbN)은 버전 체계가
 # 다르지만 같은 릴리스에서 함께 배포되므로 짝을 맞춰 올려야 한다.
+# api 는 sdk 의 전이 의존성이지만, 애플리케이션 코드가 opentelemetry.trace /
+# propagate 를 직접 import 하므로 직접 의존성으로 고정한다.
+opentelemetry-api==1.44.0
 opentelemetry-sdk==1.44.0
 opentelemetry-exporter-otlp-proto-http==1.44.0
 opentelemetry-instrumentation-fastapi==0.65b0
