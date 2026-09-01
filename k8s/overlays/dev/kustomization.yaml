@@ -16,7 +16,7 @@ replicas:
 images:
   - name: backend-auth
     newName: 594532711953.dkr.ecr.ap-northeast-2.amazonaws.com/dpyb-dev/dpyb-auth
-    newTag: 4a043bd2d64ee2c76f25f5d81b9855b476153e34
+    newTag: 6ed0eb0e2e6ac5bc860377a5ee2abd240b887cca
 
 # 개발 환경에서 달라지는 설정값만 덮어씀
 patches:
