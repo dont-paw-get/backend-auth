@@ -14,3 +14,22 @@ data:
   # 실제 사용하는 Cognito User Pool / Client ID 로 채워주세요.
   COGNITO_USER_POOL_ID: "ap-northeast-2_XXXXXXXXX"
   COGNITO_CLIENT_ID: "xxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+  # ---- 관측 (app/core/logging_config.py, app/core/tracing.py) ----
+  #
+  # 로그: 애플리케이션 stdout -> Grafana Alloy -> Loki.
+  # 파드 stdout 을 Alloy 가 수집하므로 앱 쪽에 추가 설정은 없다.
+  LOG_LEVEL: "INFO"
+  LOG_FORMAT: "json"
+
+  # 트레이스: 애플리케이션 -> OTLP -> OpenTelemetry Collector -> Tempo.
+  #
+  # OTEL_EXPORTER_OTLP_ENDPOINT 는 환경마다 collector 주소가 다르므로
+  # base 에 두지 않고 overlay 에서만 주입한다. 이 값이 없으면
+  # app/core/tracing.py 가 tracing 을 아예 켜지 않는다(연결 실패
+  # 로그를 반복해서 남기지 않기 위한 의도된 동작).
+  #
+  # exporter 프로토콜은 OTLP http/protobuf 이므로 collector 의 otlp
+  # receiver 에서 http endpoint(기본 4318)가 열려 있어야 한다.
+  # gRPC(4317)를 가리키면 export 가 실패한다.
+  OTEL_SERVICE_NAME: "backend-auth"

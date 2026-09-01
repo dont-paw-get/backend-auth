@@ -16,6 +16,34 @@ PyJWT==2.13.0
 cryptography==50.0.0
 boto3==1.35.75
 
+# observability
+#
+# 분산 추적: Application -> OTLP(http/protobuf) -> OpenTelemetry Collector
+# -> Grafana Tempo. 설정은 app/core/tracing.py 참고.
+#
+# exporter는 http/protobuf(4318)만 설치한다. 선택 근거는 (1) 여러 MSA가
+# 같은 collector로 보내는 구조에서 서비스 간 OTLP 전송 방식을 하나로
+# 통일하기 위해서이고, (2) gRPC exporter가 런타임에 끌어들이는 grpcio
+# 네이티브 확장 의존성을 인증 서비스에 추가하지 않기 위해서다.
+#
+# instrumentation은 애플리케이션 코드가 실제로 호출하는 라이브러리만
+# 넣는다. httpx는 fastapi.testclient 전용 의존성이라 제외했다 —
+# outbound httpx 호출을 추가할 때 그 변경과 함께
+# opentelemetry-instrumentation-httpx를 추가한다(app/core/tracing.py의
+# _instrument_libraries 참고).
+#
+# 구조화 로깅(stdout -> Alloy -> Loki)에는 별도 패키지를 쓰지 않는다.
+# app/core/logging_config.py가 표준 logging + json만으로 처리한다.
+#
+# opentelemetry-api/sdk(1.x)와 instrumentation(0.xbN)은 버전 체계가
+# 다르지만 같은 릴리스에서 함께 배포되므로 짝을 맞춰 올려야 한다.
+opentelemetry-sdk==1.44.0
+opentelemetry-exporter-otlp-proto-http==1.44.0
+opentelemetry-instrumentation-fastapi==0.65b0
+opentelemetry-instrumentation-sqlalchemy==0.65b0
+opentelemetry-instrumentation-botocore==0.65b0
+opentelemetry-instrumentation-urllib==0.65b0
+
 # test
 
 pytest==8.3.4

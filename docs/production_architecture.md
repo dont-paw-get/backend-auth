@@ -299,14 +299,24 @@ CI 는 GitHub Secrets 의 AWS 액세스 키로 인증한다(OIDC 아님).
 
 ## 9. 관측
 
-이 저장소에는 관측 스택이 없다. 메트릭·로그·알림은 `dpgy-infra` 저장소가
-소유하며, 서비스 저장소의 책임은 다음 두 가지다.
+이 저장소에는 관측 스택이 없다. 메트릭·로그·트레이스 백엔드와 알림은
+`dpgy-infra` 저장소가 소유하며, 서비스 저장소의 책임은 텔레메트리를
+**올바른 형식으로 내보내는 것**까지다.
 
-- `/actuator/prometheus` 에 대응하는 메트릭 엔드포인트 노출 및 `ServiceMonitor` CR
-- stdout 에 `level` 필드를 가진 JSON 구조화 로그 출력
+| 항목 | 상태 |
+|---|---|
+| stdout JSON 구조화 로그 (-> Alloy -> Loki) | **적용됨** |
+| OpenTelemetry 분산 추적 (-> OTLP -> Collector -> Tempo) | **코드 적용됨**, collector 주소 주입 대기 |
+| `/actuator/prometheus` 대응 메트릭 + `ServiceMonitor` CR | 미적용 |
 
-**둘 다 아직 적용되지 않았다.** 현재 prod 에서 확인 가능한 것은
-`kubectl logs` 와 ALB health check 뿐이다.
+로깅·추적의 구현과 운영 방법은 `docs/observability.md` 에 있다. 요약하면,
+
+- 로그는 `app/core/logging_config.py` 가 stdout 에 한 줄 JSON 으로 내보낸다.
+  파드 stdout 을 Alloy 가 수집하므로 앱 쪽 추가 설정은 없다.
+- 추적은 `app/core/tracing.py` 가 담당하며, `OTEL_EXPORTER_OTLP_ENDPOINT`
+  가 주입된 환경에서만 켜진다. 아직 dev·prod configmap 에 이 값이
+  없으므로(collector 주소 미확인) 현재는 로그만 나가고 있다.
+- 메트릭은 여전히 미적용이다.
 
 ---
 
@@ -319,5 +329,6 @@ CI 는 GitHub Secrets 의 AWS 액세스 키로 인증한다(OIDC 아님).
 | 쿠키 저장 불가 | HTTPS 오리진이 없어 `COOKIE_SECURE=true` 와 충돌 |
 | DB 계정 공용 | `admin` 을 book 과 공유 |
 | rate limit 인메모리 | replicas 2 이므로 실효 한도가 2배가 된다 |
-| 관측 미연동 | 메트릭·구조화 로그 미적용 |
+| 메트릭 미적용 | 구조화 로그·트레이스는 적용됐으나 Prometheus 메트릭은 없음 |
+| 트레이스 미수집 | 코드는 준비됐으나 `OTEL_EXPORTER_OTLP_ENDPOINT` 미주입 |
 | CI 정적 키 | GitHub OIDC 가 아니라 액세스 키 사용 |
