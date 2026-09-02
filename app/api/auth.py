@@ -230,6 +230,17 @@ def refresh_token_endpoint(
     Bearer Access Token 인증을 요구하지 않는다.
     """
     if not (refresh_token_cookie and refresh_sub_cookie):
+        # CLIAR-232: refresh 401의 사유를 로그로 구분한다. 이 분기는
+        # Cognito를 호출하기 전에 반환되므로 login_service의 error_code
+        # 로그가 남지 않는다 — 로그만 보면 "왜 401인지" 알 수 없어
+        # 원인 파악이 늦어졌다(실제 dev 장애 조사에서 확인). 토큰 값은
+        # 절대 남기지 않고, 어느 쿠키가 있었는지 여부(bool)만 남긴다.
+        logger.info(
+            "refresh rejected: reason=missing_cookies "
+            "has_refresh_token=%s has_refresh_sub=%s",
+            bool(refresh_token_cookie),
+            bool(refresh_sub_cookie),
+        )
         return _unauthorized_clearing_refresh_cookies(
             "Refresh session cookies are missing or incomplete"
         )
@@ -243,6 +254,13 @@ def refresh_token_endpoint(
             # NotAuthorizedException/UserNotFoundException: 이
             # refresh token으로는 더 이상 갱신할 수 없으므로 쿠키를
             # 지워 FE가 재로그인 흐름으로 넘어가게 한다.
+            #
+            # CLIAR-232: 쿠키는 정상적으로 있었지만 Cognito가 refresh
+            # token을 거부한 경우다. "쿠키 누락"과 명확히 구분되는
+            # 사유를 남겨 로그만으로 원인을 판별할 수 있게 한다.
+            # 구체적 Cognito error_code는 login_service가 이미 남기며,
+            # 여기서는 Cognito 원문 detail을 로그에 남기지 않는다.
+            logger.info("refresh rejected: reason=cognito_rejected")
             detail = e.detail if isinstance(e.detail, str) else str(e.detail)
             return _unauthorized_clearing_refresh_cookies(detail)
         raise HTTPException(status_code=e.status_code, detail=e.detail)
