@@ -15,6 +15,12 @@ data:
   COGNITO_USER_POOL_ID: "ap-northeast-2_XXXXXXXXX"
   COGNITO_CLIENT_ID: "xxxxxxxxxxxxxxxxxxxxxxxxxx"
 
+  # CLIAR-230: refresh 쿠키(refresh_token/refresh_sub)의 Max-Age(초).
+  # 없으면 세션 쿠키가 되어 브라우저/탭 종료 시 세션이 유실된다.
+  # Cognito refresh token 유효기간(기본 30일) 이하로 정렬한다.
+  # 2592000 = 30일. 0 이하로 두면 세션 쿠키로 동작한다.
+  COOKIE_MAX_AGE: "2592000"
+
   # ---- 관측 (app/core/logging_config.py, app/core/tracing.py) ----
   #
   # 로그: 애플리케이션 stdout -> Grafana Alloy -> Loki.

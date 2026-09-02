@@ -51,6 +51,22 @@ class Settings(BaseSettings):
     COOKIE_SAMESITE: str = "lax"
     COOKIE_DOMAIN: str | None = None
 
+    # CLIAR-230: refresh 쿠키(refresh_token/refresh_sub)의 Max-Age(초).
+    #
+    # 이 값을 주기 전까지 두 쿠키는 Max-Age/Expires가 없는 "세션 쿠키"라
+    # 브라우저/탭을 닫으면 사라졌다. access token은 프론트 메모리에만
+    # 있으므로 세션 쿠키가 사라지면 재방문 시 /auth/refresh가 "쿠키
+    # 누락"으로 401이 되어 로그인/OCR 등 모든 인증 흐름이 끊겼다.
+    #
+    # 양수면 두 쿠키가 영속 쿠키가 되어 브라우저 재시작 후에도 유지된다.
+    # dev App Client는 refresh token rotation이 비활성이라 /auth/refresh
+    # 성공 시 쿠키를 다시 내려주지 않으므로, 이 Max-Age는 로그인 시점
+    # 기준 절대 만료로 동작한다. 따라서 Cognito refresh token 유효기간
+    # (기본 30일) 이하로 정렬해야 한다 — 쿠키만 살아있고 토큰은 만료된
+    # 상태가 되면 결국 refresh가 401이 되기 때문이다. 0 이하로 두면
+    # 기존처럼 세션 쿠키로 동작한다(app/core/cookies.py 참고).
+    COOKIE_MAX_AGE: int = 30 * 24 * 60 * 60  # 30일(초)
+
     # CLIAR-160 (Phase 6): app/core/rate_limit.py가 소비하는 인증 API
     # rate limit 정책값. PLAN.md §8.3/§9.1에 이미 정의되어 있던 값을
     # 그대로 가져온다(이번 티켓에서 새로 정한 숫자가 아니다). 형식은

@@ -34,6 +34,12 @@ def set_refresh_cookies(response: Response, *, refresh_token: str, sub: str) -> 
     두 쿠키 모두 HttpOnly(JS에서 접근 불가)이며, Secure/SameSite/
     Domain은 settings 값을 그대로 반영한다(하드코딩하지 않음). 이
     함수는 refresh_token/sub 값을 로그에 남기지 않는다.
+
+    CLIAR-230: settings.COOKIE_MAX_AGE가 양수면 Max-Age를 부여해 영속
+    쿠키로 만든다(브라우저 재시작 후에도 유지). access token은 프론트
+    메모리에만 있으므로, 세션 쿠키로 두면 브라우저/탭을 닫는 순간
+    refresh 쿠키가 사라져 재방문 시 /auth/refresh가 "쿠키 누락"으로
+    401이 된다. 0 이하이면 Max-Age를 생략해 기존 세션 쿠키로 둔다.
     """
     cookie_kwargs = dict(
         httponly=True,
@@ -42,6 +48,11 @@ def set_refresh_cookies(response: Response, *, refresh_token: str, sub: str) -> 
         path=COOKIE_PATH,
         domain=settings.COOKIE_DOMAIN,
     )
+
+    # Max-Age는 양수일 때만 부여한다. 0 이하이거나 미설정이면 Starlette
+    # 기본 동작(Max-Age/Expires 없는 세션 쿠키)을 그대로 유지한다.
+    if settings.COOKIE_MAX_AGE > 0:
+        cookie_kwargs["max_age"] = settings.COOKIE_MAX_AGE
 
     response.set_cookie(REFRESH_TOKEN_COOKIE_NAME, refresh_token, **cookie_kwargs)
     response.set_cookie(REFRESH_SUB_COOKIE_NAME, sub, **cookie_kwargs)
