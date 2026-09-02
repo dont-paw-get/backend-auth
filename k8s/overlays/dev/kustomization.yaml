@@ -6,6 +6,8 @@ namespace: dpyb-auth-dev
 
 resources:
   - ../../base
+  # dev 전용: Prometheus 스크레이핑 대상 등록 (관측 인프라 연동, dev 한정)
+  - servicemonitor.yaml
 
 # 개발은 1개만
 replicas:

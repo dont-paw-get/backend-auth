@@ -43,6 +43,18 @@ data:
   # 가리키면 export 가 실패한다.
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.monitoring.svc.cluster.local:4318"
   #
+  # 인프라 Collector 는 traces 파이프라인만 받는다(gRPC 4317 은 닫혀
+  # 있음). 아래 세 값은 그 전제를 환경변수로도 못박는다.
+  #  - PROTOCOL=http/protobuf : app/core/tracing.py 는 이미 http exporter 를
+  #    명시적으로 쓰지만, opentelemetry-instrument 등 자동 구성 경로가
+  #    끼더라도 gRPC 로 넘어가지 않도록 표준 변수로 고정한다.
+  #  - METRICS_EXPORTER=none : 메트릭은 OTLP 가 아니라 /metrics(Prometheus)
+  #    로 노출한다(app/core/metrics.py). Collector 로 보내지 않는다.
+  #  - LOGS_EXPORTER=none : 로그는 stdout JSON -> Alloy -> Loki 경로다.
+  OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf"
+  OTEL_METRICS_EXPORTER: "none"
+  OTEL_LOGS_EXPORTER: "none"
+  #
   # dev 는 트레이스 검증이 목적이므로 전량 샘플링한다. ratio 방식으로 두어
   # prod 확장 시 SAMPLER_ARG 만 낮추면 되도록 한다(코드 변경 없음). ARG=1.0
   # 은 100%. 상위 traceparent 의 sampled 결정은 parentbased 가 존중한다.

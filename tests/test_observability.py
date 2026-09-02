@@ -542,10 +542,16 @@ class TestNoDuplicateServerSpan:
         return [s for s in exporter.get_finished_spans() if s.kind is SpanKind.SERVER]
 
     def test_app_adds_no_opentelemetry_asgi_middleware_of_its_own(self):
-        """CORS 외에 우리가 직접 붙인 ASGI 미들웨어는 없어야 한다."""
+        """
+        우리가 직접 붙이는 ASGI 미들웨어는 CORS 와 Prometheus 메트릭
+        둘뿐이고, 그중 어느 것도 OpenTelemetryMiddleware 가 아니어야
+        한다(FastAPI instrumentation 과 겹쳐 SERVER span 이 중복되면
+        안 되기 때문 — 아래 클래스 docstring 참고).
+        """
         source = (REPO_ROOT / "app" / "main.py").read_text(encoding="utf-8")
         assert "OpenTelemetryMiddleware" not in source
-        assert source.count("add_middleware") == 1  # CORSMiddleware 하나뿐
+        # CORSMiddleware + PrometheusMiddleware 둘뿐이다.
+        assert source.count("add_middleware") == 2
 
     def test_double_instrumentation_still_yields_one_server_span(self):
         from fastapi import FastAPI

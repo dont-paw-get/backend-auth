@@ -70,9 +70,12 @@ from app.core.logging_config import service_name
 
 logger = logging.getLogger(__name__)
 
-# FastAPI span에서 제외할 URL(정규식 부분일치). health probe는 10초
-# 간격으로 들어오며 추적 가치가 없다. 환경변수로 덮어쓸 수 있다.
-_DEFAULT_EXCLUDED_URLS = "health"
+# FastAPI span에서 제외할 URL(정규식 부분일치). 환경변수로 덮어쓸 수 있다.
+# - health : kubelet probe. 10~20초 간격으로 들어오며 추적 가치가 없다.
+# - metrics: Prometheus 스크레이핑(ServiceMonitor). 30초 간격의 반복
+#            요청이며, /metrics 자신의 지연은 애플리케이션 신호가 아니다.
+#            (app/core/metrics.py 도 같은 두 경로를 메트릭 집계에서 뺀다.)
+_DEFAULT_EXCLUDED_URLS = "health,metrics"
 
 _tracing_configured = False
 

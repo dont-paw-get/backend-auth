@@ -3,11 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.auth import router as auth_router
 from app.api.health import router as health_router
+from app.api.metrics import router as metrics_router
 from app.api.mock import router as mock_router
 from app.api.terms import router as terms_router
 from app.api.users import router as users_router
 from app.core.config import settings
 from app.core.logging_config import configure_logging
+from app.core.metrics import PrometheusMiddleware
 from app.core.tracing import configure_tracing, instrument_app
 
 
@@ -52,11 +54,18 @@ app = FastAPI(title="dont-paw-get auth service")
 
 configure_cors(app)
 
+# Prometheus HTTP 메트릭(app/core/metrics.py). 요청마다
+# http_server_requests_seconds 히스토그램(_bucket/_sum/_count)을 갱신하며
+# /metrics 로 노출한다. 인프라의 "HTTP 5xx" / "p99" 알림이 이 시계열을
+# 쓴다. tracing 과 달리 항상 켜져 있다(외부 의존성이 없다).
+app.add_middleware(PrometheusMiddleware)
+
 # FastAPI(ASGI) inbound instrumentation. 다른 MSA가 보낸 traceparent를
 # 이어받는 지점이며, tracing이 비활성이면 아무 미들웨어도 추가되지 않는다.
 instrument_app(app)
 
 app.include_router(health_router)
+app.include_router(metrics_router)
 app.include_router(mock_router)
 app.include_router(auth_router)
 app.include_router(users_router)

@@ -35,6 +35,12 @@ boto3==1.35.75
 # 구조화 로깅(stdout -> Alloy -> Loki)에는 별도 패키지를 쓰지 않는다.
 # app/core/logging_config.py가 표준 logging + json만으로 처리한다.
 #
+# HTTP 메트릭: /metrics -> ServiceMonitor -> Prometheus. prometheus-client
+# 로 Micrometer 호환 이름(http_server_requests_seconds_*)의 히스토그램을
+# 노출한다. 인프라 알림 규칙("HTTP 5xx" / "p99")이 이 시계열을 쓴다.
+# 순수 파이썬 패키지이며 OTel SDK 로 메트릭을 보내지 않는다(인프라
+# Collector 는 traces 파이프라인만 받는다). 설정은 app/core/metrics.py 참고.
+#
 # opentelemetry-api/sdk(1.x)와 instrumentation(0.xbN)은 버전 체계가
 # 다르지만 같은 릴리스에서 함께 배포되므로 짝을 맞춰 올려야 한다.
 # api 는 sdk 의 전이 의존성이지만, 애플리케이션 코드가 opentelemetry.trace /
@@ -46,6 +52,8 @@ opentelemetry-instrumentation-fastapi==0.65b0
 opentelemetry-instrumentation-sqlalchemy==0.65b0
 opentelemetry-instrumentation-botocore==0.65b0
 opentelemetry-instrumentation-urllib==0.65b0
+
+prometheus-client==0.22.1
 
 # test
 

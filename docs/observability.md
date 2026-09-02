@@ -304,7 +304,86 @@ trace 에서 빼도 조사 능력은 줄지 않는다. 같은 요청의 감사 �
 
 ---
 
-## 3. 민감정보 보호
+## 3. 메트릭 (HTTP 요청 카운터 / 지연 히스토그램)
+
+`app/core/metrics.py` + `app/api/metrics.py`.
+
+이 서비스는 Spring 이 아니라 FastAPI 지만, 인프라(`dpgy-infra`)의 알림
+규칙("HTTP 5xx 에러율", "p99 레이턴시")은 Spring Boot Actuator +
+Micrometer 의 `http_server_requests_seconds_*` 시계열을 전제로 한다.
+그래서 **같은 메트릭 이름 · 같은 라벨 구조**로 노출해 인프라가 이
+서비스만을 위한 별도 쿼리를 만들지 않아도 되게 한다.
+
+### 노출
+
+```
+로그    Application stdout ──► Grafana Alloy ──► Loki
+트레이스 Application ──OTLP/HTTP──► OpenTelemetry Collector ──► Grafana Tempo
+메트릭  Application /metrics ◄──scrape── Prometheus (ServiceMonitor)
+```
+
+`prometheus_client` 이 `GET /metrics` 로 Prometheus 텍스트 포맷을
+내보낸다. **메트릭은 OTLP 로 보내지 않는다** — 인프라 Collector 는
+traces 파이프라인만 받는다(`OTEL_METRICS_EXPORTER=none`).
+
+`GET /metrics` 는 클러스터 내부(Prometheus)에서만 호출되며 응답에
+사용자 데이터가 없다(라우트별 요청 수 / 지연 히스토그램뿐).
+
+### 시계열
+
+`prometheus_client.Histogram` 을 `http_server_requests_seconds` 라는
+이름으로 만들면 Micrometer 의 `http.server.requests` Timer 와 동일하게
+아래 셋이 나온다.
+
+| 시계열 | 용도 |
+|---|---|
+| `http_server_requests_seconds_bucket{le="..."}` | `histogram_quantile()` 로 p99 계산 |
+| `http_server_requests_seconds_count` | 요청 수 → 5xx 비율 |
+| `http_server_requests_seconds_sum` | 평균 지연 |
+
+버킷은 `prometheus_client` 기본값(5ms ~ 10s, 초 단위)이다.
+
+### 라벨 (Micrometer 기본 태그와 정렬)
+
+| 라벨 | 값 | 비고 |
+|---|---|---|
+| `application` | `backend-auth` | 로그 `service` / 트레이스 `service.name` 과 **같은 값** (`OTEL_SERVICE_NAME` 공유). RCA Agent 가 메트릭↔로그↔트레이스를 같은 서비스로 묶는 키 |
+| `method` | `GET` / `POST` / ... | |
+| `uri` | 라우트 **템플릿** (`/api/v1/auth/login`) | 실제 경로가 아님. 매칭 라우트가 없으면 `NOT_FOUND` 하나로 접음 (스캐너 카디널리티 방지) |
+| `status` | `200` / `401` / `500` ... | 문자열 |
+| `outcome` | `SUCCESS` / `CLIENT_ERROR` / `SERVER_ERROR` ... | Micrometer `outcome` 태그와 동일 |
+
+`exception` 태그는 넣지 않는다 — 5xx/p99 알림에 불필요하고 카디널리티만
+늘린다.
+
+### probe 경로 제외
+
+`/health`(kubelet probe)와 `/metrics`(스크레이핑 자신)는 메트릭
+집계에서 뺀다. 트레이스에서 같은 경로를 빼는 것과 같은 이유다 —
+주기적이고 동일하며 실제 트래픽 신호를 희석시킨다.
+
+### 관측 실패가 인증 API 를 깨뜨리지 않는다
+
+메트릭 미들웨어(`PrometheusMiddleware`, 순수 ASGI)는 요청 전후로 시간을
+재고 카운터를 올릴 뿐이다. tracing 과 달리 외부 의존성이 없어 항상
+켜져 있다. `/metrics` 직렬화가 실패해도 500 을 반환할 뿐 애플리케이션은
+계속 동작한다.
+
+### 확인 방법
+
+```bash
+# 파드에서 직접
+kubectl -n dpyb-auth-dev exec deploy/backend-auth -- \
+  python -c "import urllib.request;print(urllib.request.urlopen('http://localhost:8000/metrics').read().decode())" \
+  | grep http_server_requests_seconds_count
+
+# Prometheus 가 스크레이핑 중인지 (target 이 UP 인지)
+#   Prometheus UI > Status > Targets 에서 serviceMonitor/dpyb-auth-dev/backend-auth
+```
+
+---
+
+## 4. 민감정보 보호
 
 이 서비스는 인증 서비스다. 다음은 **어떤 경우에도** 로그·span 에 원문으로
 남기지 않는다.
@@ -365,7 +444,7 @@ login → password change → password reset → logout 전체 흐름을 DEBUG
 
 ---
 
-## 4. 예상 trace 예시
+## 5. 예상 trace 예시
 
 `POST /api/v1/auth/login` (다른 MSA 에서 `traceparent` 를 받은 경우)
 
@@ -415,7 +494,7 @@ trace 4bf92f3577b34da6a3ce929d0e0e4736
 
 ---
 
-## 5. 인프라에 필요한 설정
+## 6. 인프라에 필요한 설정
 
 이 저장소 밖(`dpgy-infra`)에서 해야 하는 일.
 
@@ -431,6 +510,22 @@ stdout 을 수집하도록 되어 있으면 그대로 들어온다. Loki 쪽에�
   상관관계의 실제 사용 지점이다.
 - 라벨 카디널리티 주의: `trace_id` 는 라벨이 아니라 구조화 메타데이터로
   두어야 한다.
+
+### 메트릭 (dev 는 이 저장소에서 완료)
+
+이 저장소가 `k8s/overlays/dev/servicemonitor.yaml` 로 ServiceMonitor 를
+배포한다. 인프라 Prometheus 는 `serviceMonitorSelectorNilUsesHelmValues=false`
+라 네임스페이스·라벨 셀렉터 제약이 없으므로 별도 등록 작업이 없다.
+인프라 쪽에서 확인/작업할 것:
+
+- Prometheus UI > Status > Targets 에서
+  `serviceMonitor/dpyb-auth-dev/backend-auth` 가 **UP** 인지.
+- 알림 규칙이 `http_server_requests_seconds_bucket` /
+  `_count` 를 그대로 쓰면 된다(Micrometer 와 이름 동일). 라벨은
+  `application="backend-auth"`, `uri`(라우트 템플릿), `status`, `outcome`,
+  `method`. `exception` 라벨은 없다.
+- NetworkPolicy 가 있다면 `monitoring` → `dpyb-auth-dev` 로 들어오는
+  8000/TCP 스크레이핑을 허용한다.
 
 ### 트레이스 (collector 주소 주입)
 
@@ -465,6 +560,11 @@ stdout 을 수집하도록 되어 있으면 그대로 들어온다. Loki 쪽에�
 ```bash
 kubectl -n dpyb-auth-dev logs deploy/backend-auth | head -5     # JSON 인지
 kubectl -n dpyb-auth-dev logs deploy/backend-auth | jq -r .level  # 파싱되는지
+
+# 메트릭이 스크레이핑되는지 (파드에서 직접)
+kubectl -n dpyb-auth-dev exec deploy/backend-auth -- \
+  python -c "import urllib.request as u;print(u.urlopen('http://localhost:8000/metrics').read().decode())" \
+  | grep http_server_requests_seconds_count
 
 # collector 주입 후: traceparent 를 넣어 호출하고 그 trace_id 로 Tempo 조회
 curl -X POST https://<host>/api/v1/auth/logout \
