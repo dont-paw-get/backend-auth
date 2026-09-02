@@ -356,6 +356,70 @@ class TestCookieRefreshMissingCookies:
         assert _is_cleared(_cookie_header(response, "refresh_sub"))
 
 
+class TestRefreshRejectionLogging:
+    """
+    CLIAR-232: refresh 401의 사유를 로그로 구분한다(쿠키 누락 vs Cognito
+    거부). 토큰 값은 어떤 사유에서도 로그에 남기지 않는다.
+    """
+
+    def test_missing_cookies_logs_reason(self, client, monkeypatch, caplog):
+        _patch_cognito(monkeypatch, _FakeCognitoClient())
+        client.cookies.clear()
+
+        with caplog.at_level(logging.INFO):
+            response = client.post(ENDPOINT)
+
+        assert response.status_code == 401
+        assert "reason=missing_cookies" in caplog.text
+        assert "has_refresh_token=False" in caplog.text
+        assert "has_refresh_sub=False" in caplog.text
+
+    def test_incomplete_cookies_logs_which_are_present(
+        self, client, monkeypatch, caplog
+    ):
+        _patch_cognito(monkeypatch, _FakeCognitoClient())
+        _set_refresh_cookies(client, refresh_token=None)
+
+        with caplog.at_level(logging.INFO):
+            client.post(ENDPOINT)
+
+        assert "reason=missing_cookies" in caplog.text
+        assert "has_refresh_token=False" in caplog.text
+        assert "has_refresh_sub=True" in caplog.text
+
+    def test_cognito_rejection_logs_distinct_reason(
+        self, client, monkeypatch, caplog
+    ):
+        _patch_cognito(
+            monkeypatch,
+            _FakeCognitoClient(error=_client_error("NotAuthorizedException")),
+        )
+        _set_refresh_cookies(client)
+
+        with caplog.at_level(logging.INFO):
+            response = client.post(ENDPOINT)
+
+        assert response.status_code == 401
+        assert "reason=cognito_rejected" in caplog.text
+        assert "reason=missing_cookies" not in caplog.text
+
+    def test_rejection_logs_do_not_contain_token_values(
+        self, client, monkeypatch, caplog
+    ):
+        _patch_cognito(
+            monkeypatch,
+            _FakeCognitoClient(error=_client_error("NotAuthorizedException")),
+        )
+        _set_refresh_cookies(
+            client, refresh_token="super-secret-refresh-abc123", sub=REFRESH_SUB
+        )
+
+        with caplog.at_level(logging.DEBUG):
+            client.post(ENDPOINT)
+
+        assert "super-secret-refresh-abc123" not in caplog.text
+
+
 class TestCookieRefreshCognitoErrors:
     def test_not_authorized_returns_401(self, client, monkeypatch):
         _patch_cognito(
