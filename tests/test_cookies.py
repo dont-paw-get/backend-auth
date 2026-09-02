@@ -100,6 +100,31 @@ class TestSetRefreshCookies:
         for header in set_cookie_headers:
             assert "Domain=" not in header
 
+    def test_max_age_set_when_positive(self, monkeypatch):
+        # CLIAR-230: COOKIE_MAX_AGE가 양수면 두 쿠키가 영속 쿠키가 되도록
+        # Max-Age가 실린다(브라우저 재시작 후에도 유지).
+        monkeypatch.setattr(settings, "COOKIE_MAX_AGE", 2592000)
+        response = Response()
+
+        cookies.set_refresh_cookies(response, refresh_token="rt-value", sub="sub-value")
+
+        set_cookie_headers = response.headers.getlist("set-cookie")
+        assert len(set_cookie_headers) == 2
+        for header in set_cookie_headers:
+            assert "Max-Age=2592000" in header
+
+    def test_max_age_omitted_when_zero(self, monkeypatch):
+        # 0 이하이면 Max-Age를 생략해 기존 세션 쿠키 동작을 유지한다.
+        monkeypatch.setattr(settings, "COOKIE_MAX_AGE", 0)
+        response = Response()
+
+        cookies.set_refresh_cookies(response, refresh_token="rt-value", sub="sub-value")
+
+        set_cookie_headers = response.headers.getlist("set-cookie")
+        assert len(set_cookie_headers) == 2
+        for header in set_cookie_headers:
+            assert "Max-Age" not in header
+
 
 class TestClearRefreshCookies:
     def test_clears_both_cookies(self):
