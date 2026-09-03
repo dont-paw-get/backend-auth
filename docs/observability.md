@@ -212,10 +212,25 @@ FastAPI instrumentation 은 내부적으로 ASGI `OpenTelemetryMiddleware` 를
 probe 경로가 `/health` 가 아닌 서비스는 그 서비스의 제외 설정에 자기
 경로를 넣는다. Python 쪽 값은 정규식 부분일치 목록(쉼표 구분)이다.
 
-애플리케이션 **로그**는 이 제외 정책의 대상이 아니다 — uvicorn access
-로그에는 probe 요청이 그대로 남는다. 로그 볼륨이 문제가 되면 Alloy
-단계에서 걸러내는 편이 낫다(앱이 자기 접근 로그를 감추는 것보다
-수집 파이프라인에서 버리는 쪽이 되돌리기 쉽다).
+애플리케이션 **로그**도 같은 두 경로(`/health`, `/metrics`)를 제외하되,
+**성공 응답(2xx/3xx)에 한해서만** 버린다. `app/core/logging_config.py`
+의 `AccessLogPathFilter` 가 `uvicorn.access` 로거에 붙어, root 핸들러에
+도달하기 전에 평가한다. dev 실측상 access 로그의 약 91%(`/health`
+81.5% + `/metrics` 9.6%)가 이 두 경로의 200 응답이었다 — 주기적이고
+동일하며 Loki 에서 실제 트래픽을 찾을 때 노이즈만 된다.
+
+- **성공하는 probe/스크레이핑 요청 수**는 어차피 다른 곳에서 보인다:
+  ALB access log / CloudWatch `RequestCount`(target group), Prometheus
+  의 `up` · `scrape_duration_seconds` · `scrape_samples_scraped`(타겟별).
+  Loki 에 같은 정보를 한 벌 더 쌓지 않는다.
+- 이 경로의 **실패(4xx/5xx)는 남긴다.** 스크레이퍼가 401/404 를 받거나
+  (예: 관리 엔드포인트에 인증이 걸린 경우) probe 가 500 을 뱉기
+  시작하면 그 access 로그 줄은 그대로 stdout 으로 나간다. 5xx 는
+  `uvicorn.error` 에도 별도로 남는다.
+- 경로 목록은 트레이스(`excluded_urls`)·메트릭(`_EXCLUDED_PATHS`)과
+  의도적으로 같다. probe 경로가 다른 서비스는 자기 필터에 자기 경로를
+  넣는다. Alloy 단계 드롭 룰은 이 규약을 아직 적용하지 않은 서비스를
+  덮는 보완 안전망으로 둔다.
 
 ### W3C trace context
 

@@ -298,6 +298,53 @@ class RedactingTextFormatter(logging.Formatter):
 _MANAGED_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
 
 
+# ---------------------------------------------------------------------------
+# probe/스크레이핑 access 로그 제외
+# ---------------------------------------------------------------------------
+
+# uvicorn.access 로그에서 (성공 응답에 한해) 버릴 요청 경로. kubelet
+# probe(/health)와 Prometheus 스크레이핑(/metrics)은 주기적이고
+# 동일하며 실제 트래픽 신호를 희석시킨다 — 트레이스(app/core/tracing.py의
+# excluded_urls)와 메트릭(app/core/metrics.py의 _EXCLUDED_PATHS)이 같은
+# 두 경로를 이미 제외하고 있고, 로그도 같은 정책으로 맞춘다. dev 실측상
+# access 로그의 약 91%가 이 두 경로의 200 응답이었다.
+#
+# 성공하는 정상 probe/스크레이핑 요청 수는 어차피 다른 곳에서 보인다
+# (ALB access log / CloudWatch RequestCount, Prometheus의 up·
+# scrape_duration_seconds). 반면 이 경로의 **실패**(4xx/5xx)는 조사에
+# 필요하므로 남긴다 — 스크레이퍼가 401/404를 받거나 probe가 500을
+# 뱉기 시작하면 그 줄은 그대로 stdout으로 나간다.
+_ACCESS_LOG_EXCLUDED_PATHS = frozenset({"/health", "/metrics"})
+
+
+class AccessLogPathFilter(logging.Filter):
+    """
+    uvicorn.access LogRecord에서 probe/스크레이핑의 **성공** 로그만
+    걸러낸다.
+
+    uvicorn의 access 로거는 `record.args`에 (client_addr, method,
+    full_path, http_version, status_code) 5-튜플을 담는다(포매팅 전).
+    세 번째 값이 쿼리스트링을 포함한 요청 경로, 다섯 번째가 상태
+    코드다. 경로가 제외 목록에 있고 상태가 2xx/3xx일 때만 버리며,
+    그 외에는(4xx/5xx, 다른 경로, 형태가 예상과 다른 레코드) 모두
+    통과시킨다 — 로그를 실수로 삼키느니 남기는 편이 낫다.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if not isinstance(args, tuple) or len(args) < 5:
+            return True
+        path = str(args[2]).split("?", 1)[0]
+        if path not in _ACCESS_LOG_EXCLUDED_PATHS:
+            return True
+        try:
+            status = int(args[4])
+        except (TypeError, ValueError):
+            return True
+        # 성공(2xx) / 리다이렉트(3xx)만 버린다. 실패는 남긴다.
+        return not (200 <= status < 400)
+
+
 def configure_logging(level: str | None = None, fmt: str | None = None) -> None:
     """
     root logger에 stdout JSON 핸들러를 설정한다.
@@ -328,6 +375,16 @@ def configure_logging(level: str | None = None, fmt: str | None = None) -> None:
         uvicorn_logger = logging.getLogger(name)
         uvicorn_logger.handlers.clear()
         uvicorn_logger.propagate = True
+
+    # uvicorn.access에서 /health·/metrics 요청 로그를 버린다. 로거
+    # 레벨 필터는 propagate 전에 한 번만 평가되므로 여기 붙이면 root
+    # 핸들러까지 도달하지 않는다. configure_logging()이 여러 번 불려도
+    # 필터가 중복 누적되지 않도록 먼저 비운다.
+    access_logger = logging.getLogger("uvicorn.access")
+    access_logger.filters = [
+        f for f in access_logger.filters if not isinstance(f, AccessLogPathFilter)
+    ]
+    access_logger.addFilter(AccessLogPathFilter())
 
     # OTLP collector가 죽어 있으면 exporter가 재시도마다 로그를 남긴다.
     # 그 자체는 애플리케이션 동작에 영향이 없으므로(app/core/tracing.py
