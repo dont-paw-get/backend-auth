@@ -34,6 +34,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from app.core import tracing
 from app.core.audit_log import audit
 from app.core.logging_config import (
+    AccessLogPathFilter,
     JsonLogFormatter,
     RedactingTextFormatter,
     TEXT_FORMAT,
@@ -475,6 +476,86 @@ class TestObservabilityNeverBreaksStartup:
 
         with TestClient(app) as client:
             assert client.get("/health").status_code == 200
+
+
+class TestAccessLogPathFilter:
+    """
+    uvicorn.access 로그에서 probe(/health)·스크레이핑(/metrics)의 **성공**
+    응답만 버린다. 트레이스/메트릭이 같은 두 경로를 이미 제외하고 있고,
+    로그도 같은 정책으로 맞춘다(dev 실측상 access 로그의 ~91%가 이 두
+    경로의 200). 실패(4xx/5xx)는 조사에 필요하므로 남긴다.
+    """
+
+    def _access_record(self, path, status=200):
+        # uvicorn AccessFormatter가 기대하는 args 5-튜플
+        return logging.LogRecord(
+            name="uvicorn.access",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg='%s - "%s %s HTTP/%s" %d',
+            args=("127.0.0.1:52000", "GET", path, "1.1", status),
+            exc_info=None,
+        )
+
+    @pytest.mark.parametrize("path", ["/health", "/metrics", "/metrics?x=1"])
+    @pytest.mark.parametrize("status", [200, 204, 301, 304])
+    def test_successful_probe_and_scrape_logs_are_dropped(self, path, status):
+        assert (
+            AccessLogPathFilter().filter(self._access_record(path, status)) is False
+        )
+
+    @pytest.mark.parametrize("path", ["/health", "/metrics"])
+    @pytest.mark.parametrize("status", [401, 404, 500, 503])
+    def test_failed_probe_and_scrape_logs_are_kept(self, path, status):
+        assert (
+            AccessLogPathFilter().filter(self._access_record(path, status)) is True
+        )
+
+    @pytest.mark.parametrize(
+        "path", ["/api/v1/auth/login", "/api/v1/users/me", "/healthz", "/", "/.env"]
+    )
+    def test_real_request_paths_pass_through(self, path):
+        assert AccessLogPathFilter().filter(self._access_record(path)) is True
+
+    def test_unexpected_record_shape_is_not_dropped(self):
+        record = logging.LogRecord(
+            name="uvicorn.access",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg="something else entirely",
+            args=None,
+            exc_info=None,
+        )
+        assert AccessLogPathFilter().filter(record) is True
+
+    def test_non_numeric_status_is_not_dropped(self):
+        record = self._access_record("/health")
+        record.args = ("127.0.0.1:52000", "GET", "/health", "1.1", "weird")
+        assert AccessLogPathFilter().filter(record) is True
+
+    def test_configure_logging_attaches_exactly_one_filter(self):
+        configure_logging()
+        configure_logging()
+        access_logger = logging.getLogger("uvicorn.access")
+        matching = [
+            f for f in access_logger.filters if isinstance(f, AccessLogPathFilter)
+        ]
+        assert len(matching) == 1
+
+    def test_filter_is_applied_at_logger_level_before_propagation(self):
+        """
+        필터를 uvicorn.access 로거에 붙였으므로, propagate로 root
+        핸들러에 도달하기 전에 평가된다(Logger.handle이 callHandlers
+        전에 filter를 부른다).
+        """
+        configure_logging()
+        access_logger = logging.getLogger("uvicorn.access")
+        # Logger.filter는 통과 시 record(또는 True)를, 차단 시 False를
+        # 반환한다(Python 3.12+는 record를 그대로 돌려준다).
+        assert not access_logger.filter(self._access_record("/health"))
+        assert access_logger.filter(self._access_record("/api/v1/auth/login"))
 
 
 # ---------------------------------------------------------------------------
